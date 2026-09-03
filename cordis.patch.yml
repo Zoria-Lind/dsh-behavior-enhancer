@@ -1,0 +1,5 @@
+# dsh bundle layer: mount the behavior-enhancer plugin.
+- insert:
+    - id: behavior-enhancer
+      name: 'dsh-behavior-enhancer'
+      config: {}
