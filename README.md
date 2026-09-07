@@ -1,7 +1,7 @@
 # dsh-behavior-enhancer
 
 > DeepSeek Harness 行为管理插件：改变模型**怎么调用工具**，让复杂任务更稳定，不干预内容本身。
-> 与 [dsh-token-optimizer](https://github.com/Liora2050348900/dsh-token-optimizer) 职责互补——
+> 与 [dsh-token-optimizer](https://github.com/Liora-Z/dsh-token-optimizer) 职责互补——
 > **token-optimizer 管内容**（压缩/裁剪/采样），**本插件管行为**（调用纪律/失败收敛/连续失败介入）。两者互不依赖，可独立安装。
 
 ## 它做什么（30 秒版）
