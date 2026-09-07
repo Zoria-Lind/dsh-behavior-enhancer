@@ -1,7 +1,7 @@
 # dsh-behavior-enhancer
 
 > DeepSeek Harness 行为管理插件：改变模型**怎么调用工具**，让复杂任务更稳定，不干预内容本身。
-> 与 [dsh-token-optimizer](https://github.com/Liora-Z/dsh-token-optimizer) 职责互补——
+> 与 [dsh-token-optimizer](https://github.com/Zoria-Lind/dsh-token-optimizer) 职责互补——
 > **token-optimizer 管内容**（压缩/裁剪/采样），**本插件管行为**（调用纪律/失败收敛/连续失败介入）。两者互不依赖，可独立安装。
 
 ## 它做什么（30 秒版）
@@ -59,6 +59,20 @@ dsh plugin --profile web add ./dsh-behavior-enhancer
       feedbackText: '该工具调用失败。请先分析失败原因并修正调用参数后再重试，不要原样重复。'
 ```
 
+## 权限与边界（上架声明）
+
+| 类别 | 实际行为 | 边界 |
+| :--- | :--- | :--- |
+| 文件 files | 读写 `~/.dsh/behavior-enhancer/state.json`（parallelConvergence 的串行状态，跨进程持久化、重启接管还原） | 只写插件自有状态文件，**不写 Profile 配置、不改 DSH 核心/官方包、不读写用户工作区** |
+| 网络 network | 无 | 不发起任何网络请求 |
+| 命令 commands | 无 | 不执行任何子进程 |
+| 凭据 credentials | 无 | 不读取任何环境变量或凭据 |
+
+- **运行时依赖**：零 npm 依赖，无外部服务。
+- **失败边界**：所有模块 fail-open——状态文件损坏即丢弃重来；约束段是**软约束**（行为提示），强制收敛由并行池与 followup 两条独立路径保证，任何一条失效不影响 DSH 核心流程。
+- **已知风险**：`failureGuard` 通过 `agent.followup()` 注入提示，模型是否服从取决于模型本身；`behaviorPrompt.text` 若被改成动态内容会破坏 DeepSeek 前缀缓存（默认静态）。
+- **兼容范围**：完整开发与验证基于 DSH `0.1.1-rc.2`（Node ≥ 18）；`0.1.2+` 与 `0.1.3+` 尚未验证，在 `package.json` 的 `dsh.compatibility.dshReleases` 中标为 `unknown`。
+
 ## 开发
 
 ```bash
@@ -69,3 +83,7 @@ node test/smoke.mjs          # 单进程全量自检（无需 API），npm test 
 
 - 实验分支：给 grep/glob 补 `isConcurrencySafe`（需 agent 作用域 shadow 包装器，复杂度高，主线不依赖）
 - 硬阻塞选项：连续失败后用 `userQuestions.ask` 阻塞等用户回答（默认走软通道 followup）
+
+## 许可 / License
+
+[MIT](LICENSE) © 2026 Zoria Lind
