@@ -33,13 +33,36 @@ export const DEFAULT_CONFIG = {
     blockFeedback: false,        // 可选:错误结果以 block+feedback 拦截(模型看不到错误正文,慎用)
     feedbackText: '该工具调用失败。请先分析失败原因并修正调用参数后再重试,不要原样重复。',
   },
+  // 写后检查(v1.1):write/edit 类工具写入后轻量语法解析(JSON/YAML + 括号配对),
+  // 失败自动从 .bak 快照回滚并报告;≥ askThreshold 个问题弹窗三选一。
+  // 文件快照存 snapshotDir(独立于记忆池,为"找回文件正确版本"铺路)。
+  postWriteCheck: {
+    enabled: true,
+    writeTools: ['write', 'edit'],
+    checkExtensions: ['json', 'yaml', 'yml', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'ps1', 'sh', 'toml', 'xml'],
+    maxFileBytes: 500000,        // 超过该大小的文件跳过检查(也跳过快照)
+    keepBackups: 5,              // 每文件保留的 .bak 快照份数
+    askThreshold: 3,             // 轻量解析发现 ≥3 个问题才弹窗询问(1~2 个自动回滚)
+    askTimeoutMs: 120000,        // 询问超时,超时按 autoRollback 降级
+    snapshotDir: '~/.dsh-memory/files',
+    autoRollback: true,          // 询问不可用/超时时:true=自动回滚(fail-safe),false=保留写入
+  },
+  // ===== memory-bridge 联动占位(dsh-memory-bridge 阶段 3b 完成后开开关即可) =====
+  memory_bridge: {
+    enabled: false,
+    sync_on_check: true,
+    rollback_from_memory: true,
+    post_write_check: true,
+  },
 }
 
 const NUMERIC_KEYS = new Set([
   'order', 'recoveryThreshold', 'complexRatio', 'minParallel', 'defaultParallel',
   'contextWindowFallback', 'maxFailures',
+  'maxFileBytes', 'keepBackups', 'askThreshold', 'askTimeoutMs',
 ])
-const STRING_KEYS = new Set(['text', 'followupMessage', 'feedbackText'])
+const STRING_KEYS = new Set(['text', 'followupMessage', 'feedbackText', 'snapshotDir'])
+const STRING_ARRAY_KEYS = new Set(['writeTools', 'checkExtensions'])
 
 function assertNumber(name, value, { min = 0, max = Infinity } = {}) {
   if (!Number.isFinite(value) || value < min || value > max) {
@@ -59,6 +82,10 @@ function resolveSection(section, defaults) {
         else assertNumber(key, value)
       } else if (STRING_KEYS.has(key)) {
         if (typeof value !== 'string') throw new Error(`dsh-behavior-enhancer config: "${key}" must be a string`)
+      } else if (STRING_ARRAY_KEYS.has(key)) {
+        if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+          throw new Error(`dsh-behavior-enhancer config: "${key}" must be an array of strings`)
+        }
       } else if (typeof value !== typeof defaults[key]) {
         throw new Error(`dsh-behavior-enhancer config: "${key}" must be ${typeof defaults[key]}`)
       }
@@ -74,5 +101,8 @@ export function resolveConfig(config = {}) {
     behaviorPrompt: resolveSection(config.behaviorPrompt, DEFAULT_CONFIG.behaviorPrompt),
     parallelConvergence: resolveSection(config.parallelConvergence, DEFAULT_CONFIG.parallelConvergence),
     failureGuard: resolveSection(config.failureGuard, DEFAULT_CONFIG.failureGuard),
+    postWriteCheck: resolveSection(config.postWriteCheck, DEFAULT_CONFIG.postWriteCheck),
+    // 占位节:enabled=false 时无模块消费,仅保证配置合法(阶段 3b 后开开关)
+    memory_bridge: resolveSection(config.memory_bridge, DEFAULT_CONFIG.memory_bridge),
   })
 }

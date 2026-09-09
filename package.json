@@ -1,7 +1,7 @@
 {
   "name": "dsh-behavior-enhancer",
-  "version": "1.0.0",
-  "description": "行为管理插件:系统提示词行为约束 / 失败收敛并行度 / 连续失败用户介入,基于 DSH 真实插件 API",
+  "version": "1.1.0",
+  "description": "行为管理插件:系统提示词行为约束 / 失败收敛并行度 / 连续失败用户介入 / 写后检查与 .bak 回滚,基于 DSH 真实插件 API",
   "license": "MIT",
   "repository": {
     "type": "git",

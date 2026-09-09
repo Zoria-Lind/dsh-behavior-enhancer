@@ -17,6 +17,8 @@
 //   1. behaviorPrompt     系统提示词行为约束段(软约束)
 //   2. parallelConvergence 失败 → 并行度压 1;连续成功恢复;上下文压力降档
 //   3. failureGuard       同工具连续失败 ≥2 → 提示模型向用户确认
+//   4. postWriteCheck     写后检查(v1.1):write/edit 后轻量语法解析,失败自动
+//      .bak 回滚并报告;≥3 个问题弹窗三选一(仅本次/自动升级/不校验)
 //
 // 与核心的关系:核心已保证写操作 exclusive(edit/write/pwsh 串行)、
 // read/read_image 并行安全;本插件只动池上限,不碰工具定义。
@@ -25,6 +27,7 @@ import { DEFAULT_CONFIG, resolveConfig } from './config.js'
 import { createBehaviorPromptModule } from './modules/behaviorPrompt.js'
 import { createParallelConvergenceModule } from './modules/parallelConvergence.js'
 import { createFailureGuardModule } from './modules/failureGuard.js'
+import { createPostWriteCheckModule } from './modules/postWriteCheck.js'
 import { createStats } from './stats.js'
 
 export function apply(ctx, config = {}) {
@@ -35,6 +38,7 @@ export function apply(ctx, config = {}) {
   if (resolved.behaviorPrompt.enabled) modules.push(createBehaviorPromptModule(ctx, resolved.behaviorPrompt, stats))
   if (resolved.parallelConvergence.enabled) modules.push(createParallelConvergenceModule(ctx, resolved.parallelConvergence, stats))
   if (resolved.failureGuard.enabled) modules.push(createFailureGuardModule(ctx, resolved.failureGuard, stats))
+  if (resolved.postWriteCheck.enabled) modules.push(createPostWriteCheckModule(ctx, resolved.postWriteCheck, stats))
   return () => {
     for (const cleanup of modules) cleanup()
     stats.dispose()

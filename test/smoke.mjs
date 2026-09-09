@@ -1,7 +1,7 @@
 // 单进程 smoke 验证(与 token-optimizer 同款风格)。
 // 用法: node test/smoke.mjs
 
-import { writeFileSync, existsSync } from 'node:fs'
+import { writeFileSync, existsSync, readFileSync, readdirSync, rmSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveConfig } from '../src/config.js'
@@ -9,6 +9,7 @@ import { createStats } from '../src/stats.js'
 import { createBehaviorPromptModule } from '../src/modules/behaviorPrompt.js'
 import { createParallelConvergenceModule } from '../src/modules/parallelConvergence.js'
 import { createFailureGuardModule } from '../src/modules/failureGuard.js'
+import { createPostWriteCheckModule, lightParse } from '../src/modules/postWriteCheck.js'
 
 let failures = 0
 function check(name, cond) {
@@ -43,9 +44,31 @@ console.log('== config ==')
   const cfg = resolveConfig({})
   check('默认 order -98', cfg.behaviorPrompt.order === -98)
   check('默认 recoveryThreshold 3', cfg.parallelConvergence.recoveryThreshold === 3)
+  check('v1.1 postWriteCheck 默认开启', cfg.postWriteCheck.enabled === true)
+  check('v1.1 askThreshold 默认 3', cfg.postWriteCheck.askThreshold === 3)
+  check('v1.1 keepBackups 默认 5', cfg.postWriteCheck.keepBackups === 5)
+  check('v1.1 快照目录默认 ~/.dsh-memory/files', cfg.postWriteCheck.snapshotDir === '~/.dsh-memory/files')
+  check('memory_bridge 占位节 enabled=false', cfg.memory_bridge.enabled === false)
   let threw = false
   try { resolveConfig({ behaviorPrompt: { bogus: 1 } }) } catch { threw = true }
   check('未知键报错', threw)
+  threw = false
+  try { resolveConfig({ postWriteCheck: { writeTools: ['write', 3] } }) } catch { threw = true }
+  check('writeTools 非字符串数组报错', threw)
+}
+
+console.log('== lightParse 单元 ==')
+{
+  check('JSON 合法 0 问题', lightParse('{"a": 1}', 'json').length === 0)
+  check('JSON 非法 1 问题', lightParse('{"a": }', 'json').length === 1)
+  const codeBad = 'function f() {\n  return 1\n'
+  check('括号未闭合检出', lightParse(codeBad, 'js').some((i) => /括号未闭合/.test(i.msg)))
+  const codeOk = 'const a = "}"; // {\nconst b = `\n{`\n/* ] */\nfunction f() { return a }\n'
+  check('字符串/注释内括号不误报', lightParse(codeOk, 'js').length === 0)
+  const yamlTab = 'a:\n\tb: 1\n'
+  check('YAML tab 缩进检出', lightParse(yamlTab, 'yaml').some((i) => /tab/.test(i.msg)))
+  const pyHash = '# (\nprint("ok")\n'
+  check('py # 注释内括号不误报', lightParse(pyHash, 'py').length === 0)
 }
 
 console.log('== behaviorPrompt ==')
@@ -174,6 +197,172 @@ console.log('== failureGuard ==')
   check('成功后计数清零', followed.length === 2)
   check('failures 计数', stats.snapshot().counters['behavior.failures'] === 6)
   check('alerts 计数', stats.snapshot().counters['behavior.alerts'] === 2)
+}
+
+console.log('== postWriteCheck 写后检查(v1.1) ==')
+{
+  const tmpBase = mkdtempSync(join(tmpdir(), 'beh-pwc-'))
+  const snapRoot = join(tmpBase, 'snap')
+  const filePath = join(tmpBase, 'config.json')
+  const writeFlow = async (ctx, path, content, isError = false) => {
+    const exec = { name: 'write', arguments: { file_path: path } }
+    await ctx.emit('tools/execute', exec, async () => {
+      if (!isError) writeFileSync(path, content, 'utf8')
+      return { isError, value: 'ok' }
+    })
+    return ctx.emit('tools/post-execute', exec,
+      { isError, content: [{ type: 'text', text: 'ok' }] },
+      async () => ({ kind: 'accept', content: [{ type: 'text', text: 'wrote' }] }))
+  }
+  const cfg = resolveConfig({}).postWriteCheck
+  const bad3 = 'const a = {\nconst b = {\nconst c = {\n' // 3 个未闭合 {
+  const badJson = '{"a": }' // JSON 1 个错误
+
+  // 1) 合法 JSON 写入:不检查不干预
+  {
+    writeFileSync(filePath, '{"old": true}', 'utf8')
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createPostWriteCheckModule(ctx, cfg, stats, { snapshotDir: snapRoot })
+    const d = await writeFlow(ctx, filePath, '{"new": 1}')
+    check('pwc 合法写入不干预', d.kind === 'accept' && d.content[0].text === 'wrote' && readFileSync(filePath, 'utf8') === '{"new": 1}')
+    check('pwc 合法写入不回滚', stats.snapshot().counters['postWriteCheck.rollbacks'] === undefined)
+  }
+  // 2) 非法 JSON(1 个问题)→ 自动回滚 + 报告
+  {
+    writeFileSync(filePath, '{"good": true}', 'utf8')
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createPostWriteCheckModule(ctx, cfg, stats, { snapshotDir: snapRoot })
+    const d = await writeFlow(ctx, filePath, badJson)
+    const text = d.content[0].text
+    check('pwc 非法 JSON 自动回滚', readFileSync(filePath, 'utf8') === '{"good": true}')
+    check('pwc 报告含写后检查标记', /写后检查/.test(text) && /回滚/.test(text))
+    check('pwc 报告含问题数', /1 个问题/.test(text))
+    check('pwc 回滚计数', stats.snapshot().counters['postWriteCheck.rollbacks'] === 1)
+    check('pwc 快照 .bak 已保留', readdirSync(snapRoot, { recursive: true }).some((n) => String(n).includes('.bak-')))
+  }
+  // 3) 新建文件 + 非法内容 → 回滚 = 删除新文件
+  {
+    const newPath = join(tmpBase, 'brand-new.json')
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createPostWriteCheckModule(ctx, cfg, stats, { snapshotDir: snapRoot })
+    const d = await writeFlow(ctx, newPath, badJson)
+    check('pwc 非法新文件已删除', !existsSync(newPath))
+    check('pwc 新文件报告含删除说明', /已将其删除/.test(d.content[0].text))
+  }
+  // 4) 写入失败(isError):丢弃本次快照,不检查不报告
+  {
+    const snapBefore = readdirSync(snapRoot, { recursive: true }).filter((n) => String(n).includes('.bak-')).length
+    writeFileSync(filePath, '{"stable": 1}', 'utf8')
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createPostWriteCheckModule(ctx, cfg, stats, { snapshotDir: snapRoot })
+    const d = await writeFlow(ctx, filePath, badJson, true)
+    const snapAfter = readdirSync(snapRoot, { recursive: true }).filter((n) => String(n).includes('.bak-')).length
+    check('pwc 写入失败不干预', d.content[0].text === 'wrote' && readFileSync(filePath, 'utf8') === '{"stable": 1}')
+    check('pwc 写入失败快照已丢弃', snapAfter === snapBefore)
+  }
+  // 5) 非检查扩展名(.txt):不检查
+  {
+    const txtPath = join(tmpBase, 'notes.txt')
+    writeFileSync(txtPath, 'old', 'utf8')
+    const ctx = makeFakeCtx()
+    createPostWriteCheckModule(ctx, cfg, createStats(), { snapshotDir: snapRoot })
+    const d = await writeFlow(ctx, txtPath, '{ broken')
+    check('pwc 非检查扩展名不干预', readFileSync(txtPath, 'utf8') === '{ broken' && d.content[0].text === 'wrote')
+  }
+
+  // ---- ≥3 个问题的询问三选一(JS 内容必须写在 .js 文件:JSON 分支的 parse 只报 1 个问题) ----
+  const jsPath = join(tmpBase, 'config.js')
+  const mkAskCtx = (askImpl) => {
+    const ctx = makeFakeCtx({ userQuestions: { ask: askImpl } })
+    return ctx
+  }
+  const markRunning = (ctx) => ctx.emit('agent/status', { agent: { id: 'root1' }, status: 'running' })
+
+  // 6) 仅本次校验:回滚;第二个坏文件再次询问
+  {
+    let askCount = 0
+    const ctx = mkAskCtx(async (req) => { askCount += 1; return { answers: [{ id: 'post_write_check', selected: ['仅本次校验'] }] } })
+    const stats = createStats()
+    createPostWriteCheckModule(ctx, cfg, stats, { snapshotDir: snapRoot })
+    await markRunning(ctx)
+    writeFileSync(jsPath, 'ok-before', 'utf8')
+    await writeFlow(ctx, jsPath, bad3)
+    check('pwc 仅本次校验:回滚', readFileSync(jsPath, 'utf8') === 'ok-before')
+    writeFileSync(jsPath, 'ok-before2', 'utf8')
+    await writeFlow(ctx, jsPath, bad3)
+    check('pwc 仅本次校验:下次仍询问', askCount === 2 && readFileSync(jsPath, 'utf8') === 'ok-before2')
+    check('pwc 询问计数', stats.snapshot().counters['postWriteCheck.asks'] === 2)
+  }
+  // 7) 本次+后续自动升级:第二个坏文件不再询问,直接回滚
+  {
+    let askCount = 0
+    const ctx = mkAskCtx(async () => { askCount += 1; return { answers: [{ id: 'post_write_check', selected: ['本次+后续自动升级'] }] } })
+    createPostWriteCheckModule(ctx, cfg, createStats(), { snapshotDir: snapRoot })
+    await markRunning(ctx)
+    writeFileSync(jsPath, 'ok-before', 'utf8')
+    const d1 = await writeFlow(ctx, jsPath, bad3)
+    writeFileSync(jsPath, 'ok-before2', 'utf8')
+    await writeFlow(ctx, jsPath, bad3)
+    check('pwc 自动升级:第二次不再询问', askCount === 1 && readFileSync(jsPath, 'utf8') === 'ok-before2')
+    check('pwc 自动升级报告含说明', /自动升级/.test(d1.content[0].text))
+  }
+  // 8) 不校验:保留本次写入
+  {
+    let askCount = 0
+    const ctx = mkAskCtx(async () => { askCount += 1; return { answers: [{ id: 'post_write_check', selected: ['不校验'] }] } })
+    const stats = createStats()
+    createPostWriteCheckModule(ctx, cfg, stats, { snapshotDir: snapRoot })
+    await markRunning(ctx)
+    writeFileSync(jsPath, 'ok-before', 'utf8')
+    const d = await writeFlow(ctx, jsPath, bad3)
+    check('pwc 不校验:保留写入', askCount === 1 && readFileSync(jsPath, 'utf8') === bad3 && d.content[0].text === 'wrote')
+    check('pwc 不校验不回滚', stats.snapshot().counters['postWriteCheck.rollbacks'] === undefined)
+  }
+  // 9) 询问抛错/无 agent → 按 autoRollback 降级回滚
+  {
+    const ctx = mkAskCtx(async () => { throw new Error('NO_PROVIDER') })
+    createPostWriteCheckModule(ctx, cfg, createStats(), { snapshotDir: snapRoot })
+    await markRunning(ctx)
+    writeFileSync(jsPath, 'ok-before', 'utf8')
+    await writeFlow(ctx, jsPath, bad3)
+    check('pwc 询问抛错降级回滚', readFileSync(jsPath, 'utf8') === 'ok-before')
+    const ctx2 = mkAskCtx(async () => { throw new Error('NO_PROVIDER') })
+    createPostWriteCheckModule(ctx2, { ...cfg, autoRollback: false }, createStats(), { snapshotDir: snapRoot })
+    await markRunning(ctx2)
+    writeFileSync(jsPath, 'ok-before2', 'utf8')
+    await writeFlow(ctx2, jsPath, bad3)
+    check('pwc autoRollback=false 保留写入', readFileSync(jsPath, 'utf8') === bad3)
+  }
+  // 10) 询问超时 → 按 autoRollback 降级回滚
+  {
+    const hangAsk = (req) => new Promise((_, reject) => {
+      req.signal.addEventListener('abort', () => reject(new Error('ASK_ABORTED')))
+    })
+    const ctx = mkAskCtx(hangAsk)
+    createPostWriteCheckModule(ctx, { ...cfg, askTimeoutMs: 60 }, createStats(), { snapshotDir: snapRoot })
+    await markRunning(ctx)
+    writeFileSync(jsPath, 'ok-before', 'utf8')
+    await writeFlow(ctx, jsPath, bad3)
+    check('pwc 询问超时降级回滚', readFileSync(jsPath, 'utf8') === 'ok-before')
+  }
+  // 11) keepBackups=5:连续 7 次合法写入只保留 5 份快照
+  {
+    const snapOnly = join(tmpBase, 'snap-keep')
+    const ctx = makeFakeCtx()
+    createPostWriteCheckModule(ctx, { ...cfg, keepBackups: 5 }, createStats(), { snapshotDir: snapOnly })
+    for (let i = 0; i < 7; i++) {
+      writeFileSync(filePath, `{"v": ${i}}`, 'utf8')
+      await writeFlow(ctx, filePath, `{"v": ${i + 1}}`)
+    }
+    const baks = readdirSync(snapOnly, { recursive: true }).filter((n) => String(n).includes('.bak-'))
+    check('pwc 快照保留上限 5 份', baks.length === 5)
+  }
+
+  rmSync(tmpBase, { recursive: true, force: true })
 }
 
 console.log('')
