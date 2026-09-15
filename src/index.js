@@ -28,6 +28,10 @@ import { createBehaviorPromptModule } from './modules/behaviorPrompt.js'
 import { createParallelConvergenceModule } from './modules/parallelConvergence.js'
 import { createFailureGuardModule } from './modules/failureGuard.js'
 import { createPostWriteCheckModule } from './modules/postWriteCheck.js'
+import { createWriteDiffVerifyModule } from './modules/writeDiffVerify.js'
+import { createHardGateModule } from './modules/hardGate.js'
+import { createVerifyLoopModule } from './modules/verifyLoop.js'
+import { createComplianceModule } from './modules/compliance.js'
 import { createStats } from './stats.js'
 
 export function apply(ctx, config = {}) {
@@ -39,6 +43,12 @@ export function apply(ctx, config = {}) {
   if (resolved.parallelConvergence.enabled) modules.push(createParallelConvergenceModule(ctx, resolved.parallelConvergence, stats))
   if (resolved.failureGuard.enabled) modules.push(createFailureGuardModule(ctx, resolved.failureGuard, stats))
   if (resolved.postWriteCheck.enabled) modules.push(createPostWriteCheckModule(ctx, resolved.postWriteCheck, stats))
+  // hardGate 必须先于 writeDiffVerify 注册(pre-execute 默认注册序:先注册者更外层):
+  // 高风险命令在 hardGate 处即被 deny,不再付 writeDiffVerify 的 git 快照成本
+  if (resolved.hardGate.enabled) modules.push(createHardGateModule(ctx, resolved.hardGate, stats))
+  if (resolved.writeDiffVerify.enabled) modules.push(createWriteDiffVerifyModule(ctx, resolved.writeDiffVerify, stats))
+  if (resolved.verifyLoop.enabled) modules.push(createVerifyLoopModule(ctx, resolved.verifyLoop, stats))
+  if (resolved.compliance.enabled) modules.push(createComplianceModule(ctx, resolved.compliance, stats))
   return () => {
     for (const cleanup of modules) cleanup()
     stats.dispose()

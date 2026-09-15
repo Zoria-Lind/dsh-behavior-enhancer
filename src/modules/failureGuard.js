@@ -9,39 +9,63 @@
 // 模型看不到错误正文——风险是模型不知道失败细节而盲目重试,慎用。
 
 import { detectFailure } from './failureDetect.js'
+import { resolveKernelModule } from '../kernel.js'
 
-export function createFailureGuardModule(ctx, config, stats) {
+export function createFailureGuardModule(ctx, config, stats, deps = {}) {
   if (!config?.enabled) return () => {}
   if (!ctx || typeof ctx.on !== 'function') return () => {}
 
   const streaks = new Map() // toolName -> 连续失败次数
   let warned = false
 
+  // B1 硬伤修复:followup 必须传 UserMessage。裸字符串在调用点不校验、失败推迟到
+  // 消息被 claim/投影时才爆(插件抓不到,P2)。经 createUserMessage 构造——内核先例
+  // dsh-command-goal/lib/index.js:99 同款;deps.createUserMessage 供测试注入假实现。
+  const createUserMessage = typeof deps.createUserMessage === 'function'
+    ? deps.createUserMessage
+    : (() => {
+      const llm = resolveKernelModule('@deepseek-ai/dsh-llm')
+      return llm && typeof llm.createUserMessage === 'function' ? llm.createUserMessage : null
+    })()
+  let warnedNoLlm = false
+
   const alert = (agent, name, count) => {
-    const message = String(config.followupMessage)
+    const text = String(config.followupMessage)
       .replace('{tool}', String(name))
       .replace('{count}', String(count))
-    if (agent && typeof agent.followup === 'function') {
-      try {
-        agent.followup(message)
-        stats?.bump('behavior.alerts', 1)
-        return
-      } catch (err) {
-        if (!warned) {
-          warned = true
-          console.warn(`[dsh-behavior-enhancer] agent.followup 失败:${err?.message ?? err}`)
-        }
+    if (!agent || typeof agent.followup !== 'function') {
+      if (!warned) {
+        warned = true
+        console.warn('[dsh-behavior-enhancer] tools/result 拿不到 agent.followup,连续失败提示未送达(模型仍能从错误内容自行感知)')
       }
-    } else if (!warned) {
-      warned = true
-      console.warn('[dsh-behavior-enhancer] tools/result 拿不到 agent.followup,连续失败提示未送达(模型仍能从错误内容自行感知)')
+      return
+    }
+    if (typeof createUserMessage !== 'function') {
+      if (!warnedNoLlm) {
+        warnedNoLlm = true
+        console.warn('[dsh-behavior-enhancer] 未能解析 @deepseek-ai/dsh-llm,无法构造 UserMessage,连续失败提示未送达')
+      }
+      return
+    }
+    try {
+      agent.followup(createUserMessage({
+        content: [{ type: 'text', text }],
+        source: { kind: 'plugin', plugin: 'behavior-enhancer', form: 'notice', summary: 'failure-guard' },
+      }))
+      stats?.bump('behavior.alerts', 1)
+    } catch (err) {
+      if (!warned) {
+        warned = true
+        console.warn(`[dsh-behavior-enhancer] agent.followup 失败:${err?.message ?? err}`)
+      }
     }
   }
 
   const onResult = (exec, result) => {
     const name = exec?.name
     if (!name) return
-    if (!detectFailure(result, config)) {
+    // B1:显式传选项对象,不把整个 config 当第二参(此前靠解构巧合成立)
+    if (!detectFailure(result, { stderrAsFailure: config.stderrAsFailure })) {
       streaks.delete(name)
       return
     }

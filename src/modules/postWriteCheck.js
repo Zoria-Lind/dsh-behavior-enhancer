@@ -142,6 +142,17 @@ function tsName() {
   return new Date().toISOString().replace(/[:.]/g, '-')
 }
 
+// B1 硬伤修复:路径解析用"会话 cwd"(exec.agent.session.header.cwd;exec 本身没有
+// cwd 字段,内核先例 dsh-spill-policy/lib/index.js:85-87),禁用 process.cwd()——
+// 会话 cwd ≠ 进程 cwd 时,相对路径会解析到错误目录导致检查静默失效。
+// 无法确定 cwd 时返回 null,由调用方显式告警并跳过(不许静默)。
+function resolveCheckPath(exec, filePath) {
+  if (isAbsolute(filePath)) return resolve(filePath)
+  const headerCwd = exec?.agent?.session?.header?.cwd
+  if (typeof headerCwd === 'string' && headerCwd.length > 0) return resolve(headerCwd, filePath)
+  return null
+}
+
 export function createPostWriteCheckModule(ctx, config, stats, deps = {}) {
   if (!config?.enabled) return () => {}
   if (!ctx || typeof ctx.on !== 'function') return () => {}
@@ -271,7 +282,11 @@ export function createPostWriteCheckModule(ctx, config, stats, deps = {}) {
       ? args.file_path.trim()
       : (typeof args.path === 'string' && args.path.trim().length > 0 ? args.path.trim() : null)
     if (!filePath) return next()
-    const absPath = isAbsolute(filePath) ? resolve(filePath) : resolve(process.cwd(), filePath)
+    const absPath = resolveCheckPath(exec, filePath)
+    if (!absPath) {
+      console.warn(`[dsh-behavior-enhancer] 相对路径 "${filePath}" 且无法确定会话 cwd,跳过写前快照与写后检查`)
+      return next()
+    }
     const ext = extname(absPath).slice(1).toLowerCase()
     if (!checkExts.has(ext)) return next()
     // 写前快照(文件不存在时也记录,回滚=删除)
@@ -296,7 +311,11 @@ export function createPostWriteCheckModule(ctx, config, stats, deps = {}) {
       ? args.file_path.trim()
       : (typeof args.path === 'string' && args.path.trim().length > 0 ? args.path.trim() : null)
     if (!filePath) return decision
-    const absPath = isAbsolute(filePath) ? resolve(filePath) : resolve(process.cwd(), filePath)
+    const absPath = resolveCheckPath(exec, filePath)
+    if (!absPath) {
+      console.warn(`[dsh-behavior-enhancer] 相对路径 "${filePath}" 且无法确定会话 cwd,跳过写后检查`)
+      return decision
+    }
     const snap = pending.get(absPath)
     if (!snap) return decision
     pending.delete(absPath)

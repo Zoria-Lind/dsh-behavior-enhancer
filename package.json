@@ -1,15 +1,8 @@
 {
   "name": "dsh-behavior-enhancer",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "行为管理插件:系统提示词行为约束 / 失败收敛并行度 / 连续失败用户介入 / 写后检查与 .bak 回滚,基于 DSH 真实插件 API",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Zoria-Lind/dsh-behavior-enhancer.git"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -18,17 +11,16 @@
   "files": [
     "src",
     "cordis.patch.yml",
-    "README.md",
-    "LICENSE"
+    "README.md"
   ],
   "scripts": {
     "test": "node test/smoke.mjs"
   },
   "dsh": {
-    "pluginType": "feature",
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
+    "pluginType": "feature",
     "compatibility": {
       "dsh": ">=0.1.1-rc.2 <0.1.2",
       "dshReleases": {
@@ -44,6 +36,8 @@
     "behavior",
     "parallel",
     "stability",
-    "error-recovery"
+    "error-recovery",
+    "dsh-plugin",
+    "deepseek-harness"
   ]
 }

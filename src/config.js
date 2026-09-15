@@ -2,10 +2,12 @@
 
 export const DEFAULT_CONFIG = {
   // 系统提示词行为约束段:经 ctx.inject(['systemPrompt']) 注册静态 section
-  // (静态文本 = 前缀缓存友好;软约束,强制靠 parallelConvergence)
+  // (静态文本 = 前缀缓存友好;软约束,强制靠 parallelConvergence / hardGate)
+  // B2:discipline* 三键为扁平键(走 resolveSection 浅校验);text 是逃生舱,
+  // 显式自定义时原样注册(旧配置行为不变)
   behaviorPrompt: {
     enabled: true,
-    order: -98,              // identity(-100) / source(-99) 之后,persona(0) 之前
+    order: -98,              // 内核不可解析时的回退值;可解析时取 identity(-1000)与 persona(0)的中点
     text: `## 工具调用行为纪律(本会话,来自 dsh-behavior-enhancer)
 - 先读后写:修改任何文件前先 read 确认当前内容,禁止盲写。
 - 批量操作前先验证:对多个目标做同类操作时,先对其中一个试做并确认结果,再批量执行。
@@ -13,6 +15,9 @@ export const DEFAULT_CONFIG = {
 - 同类修改串行:对同一文件/同一资源的修改按顺序进行,不要并行发出相互冲突的修改。
 - 证据与诚实:回答用户前核实证据;引用文件路径前先确认文件存在;不确定就明说不知道,禁止编造或臆想。
 - 上下文已压缩时:若历史被压缩为摘要(compacted-summary),对细节有疑问先查日志或重新获取,不要臆造。`,
+    disciplinePreset: 'default',   // 'default' | 'strict'(B2:预设切换)
+    disciplineIncludeTags: [],     // 按条目 tags 筛选(空 = 全部)
+    disciplineMaxBytes: 4000,      // 字节预算;超预算整条丢弃并留显式告警
   },
   // 并行收敛:工具失败 → 池上限压 1;连续 N 次成功恢复;上下文压力 → 降档
   parallelConvergence: {
@@ -47,6 +52,29 @@ export const DEFAULT_CONFIG = {
     snapshotDir: '~/.dsh-memory/files',
     autoRollback: true,          // 询问不可用/超时时:true=自动回滚(fail-safe),false=保留写入
   },
+  // B7 变更核验:write 追加 meta.diffs 摘要;pwsh 做前后差集(git status --porcelain),
+  // 只报本次新增的变更,删除行标 ⚠。扁平键,全部走 resolveSection 浅校验。
+  writeDiffVerify: {
+    enabled: true,
+    gitStatusOnPwsh: true,       // pwsh 前后差集开关(非 git 目录静默跳过)
+    writeDiffTimeoutMs: 5000,    // git 调用超时,绝不阻塞工具链
+    writeDiffMaxLines: 400,      // 截断口径与 better-edit 对齐(400 行 / 80KB)
+  },
+  // B3 高风险命令闸门(软闸门 + 计数逃生;真硬闸门 ctx.tools.guard 一期不注册)
+  hardGate: {
+    enabled: true,
+    maxStrikes: 3,               // 同一原因连续拦截超过该次数 → 自动放行(防空转死锁)
+    highRiskMode: 'ask',         // 'ask'(默认,无审批服务时内核降级 deny)| 'deny'
+  },
+  // B4 强制验证环:改过文件且当轮无验证证据 → steer 注入一次验证要求(单轮 1 次)
+  verifyLoop: {
+    enabled: true,
+  },
+  // B5 遵守度统计:session/flush 落盘 + /behavior-status 命令
+  compliance: {
+    enabled: true,
+    statsPath: '~/.dsh/behavior-enhancer/stats.json', // 沿用 ~/.dsh 布局(DSH home);可改 D 盘
+  },
   // ===== memory-bridge 联动占位(dsh-memory-bridge 阶段 3b 完成后开开关即可) =====
   memory_bridge: {
     enabled: false,
@@ -60,9 +88,10 @@ const NUMERIC_KEYS = new Set([
   'order', 'recoveryThreshold', 'complexRatio', 'minParallel', 'defaultParallel',
   'contextWindowFallback', 'maxFailures',
   'maxFileBytes', 'keepBackups', 'askThreshold', 'askTimeoutMs',
+  'writeDiffTimeoutMs', 'writeDiffMaxLines', 'disciplineMaxBytes',
 ])
-const STRING_KEYS = new Set(['text', 'followupMessage', 'feedbackText', 'snapshotDir'])
-const STRING_ARRAY_KEYS = new Set(['writeTools', 'checkExtensions'])
+const STRING_KEYS = new Set(['text', 'followupMessage', 'feedbackText', 'snapshotDir', 'highRiskMode', 'statsPath', 'disciplinePreset'])
+const STRING_ARRAY_KEYS = new Set(['writeTools', 'checkExtensions', 'disciplineIncludeTags'])
 
 function assertNumber(name, value, { min = 0, max = Infinity } = {}) {
   if (!Number.isFinite(value) || value < min || value > max) {
@@ -102,6 +131,10 @@ export function resolveConfig(config = {}) {
     parallelConvergence: resolveSection(config.parallelConvergence, DEFAULT_CONFIG.parallelConvergence),
     failureGuard: resolveSection(config.failureGuard, DEFAULT_CONFIG.failureGuard),
     postWriteCheck: resolveSection(config.postWriteCheck, DEFAULT_CONFIG.postWriteCheck),
+    writeDiffVerify: resolveSection(config.writeDiffVerify, DEFAULT_CONFIG.writeDiffVerify),
+    hardGate: resolveSection(config.hardGate, DEFAULT_CONFIG.hardGate),
+    verifyLoop: resolveSection(config.verifyLoop, DEFAULT_CONFIG.verifyLoop),
+    compliance: resolveSection(config.compliance, DEFAULT_CONFIG.compliance),
     // 占位节:enabled=false 时无模块消费,仅保证配置合法(阶段 3b 后开开关)
     memory_bridge: resolveSection(config.memory_bridge, DEFAULT_CONFIG.memory_bridge),
   })

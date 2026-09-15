@@ -11,7 +11,7 @@
 | behaviorPrompt | `ctx.inject(['systemPrompt'])` + `systemPrompt.section()` | 注册静态行为约束段（先读后写、批量前先验证、失败即收敛、同类修改串行）。**软约束**，强制靠下面模块 |
 | parallelConvergence | `tools/result` + `settings.update('agent-loop', {maxParallelToolCalls})` | 任何工具失败（含命令级失败）→ 并行池上限压到 1；连续 3 次成功 → 恢复用户原值；上下文压力 ≥60%（idle 测量）→ 降档，回落 <54% 滞回恢复。串行状态**跨进程持久化**，重启自动接管还原 |
 | failureGuard | `tools/result` + `agent.followup()` | 同工具连续失败 ≥2 次 → 向模型注入提示，引导它向用户确认而不是继续重试 |
-| postWriteCheck | `tools/execute`（写前快照）+ `tools/post-execute`（写后检查） | write/edit 写入后做轻量语法解析（JSON 用 JSON.parse；YAML/代码做字符串与注释感知的括号配对 + YAML tab 检查）。失败自动从 `.bak` 快照回滚并改写工具结果报告模型；≥3 个问题弹窗三选一（仅本次校验 / 本次+后续自动升级 / 不校验）。快照存 `~/.dsh-memory/files/`，每文件保留最近 5 份 |
+| postWriteCheck | `tools/execute`（写前快照）+ `tools/post-execute`（写后检查） | write/edit 写入后做轻量语法解析（JSON 用 JSON.parse；YAML/代码做字符串与注释感知的括号配对 + YAML tab 缩进检查）。失败自动从 `.bak` 快照回滚并改写工具结果报告模型；≥3 个问题弹窗三选一（仅本次校验 / 本次+后续自动升级 / 不校验）。快照存 `~/.dsh-memory/files/`（独立于记忆池），每文件保留最近 5 份 |
 
 **失败识别两档**：工具级 `isError` + 命令级签名（stderrAsFailure，默认开）——DSH 的 pwsh 工具只有基础设施错误才标 `isError`，命令失败（非零退出/stderr 错误）作为普通结果返回；本插件按 `[exit code: N]` 与 stderr 错误关键词补识别，普通 warning 不误判。
 
@@ -74,6 +74,17 @@ dsh plugin --profile web add ./dsh-behavior-enhancer
       rollback_from_memory: true
       post_write_check: true
 ```
+
+## 开发
+
+```bash
+node test/smoke.mjs          # 单进程全量自检（无需 API），npm test 同
+```
+
+## 路线图
+
+- 实验分支：给 grep/glob 补 `isConcurrencySafe`（需 agent 作用域 shadow 包装器，复杂度高，主线不依赖）
+- dsh-memory-bridge 联动（配置节已占位；`~/.dsh-memory/files/` 文件快照已就绪，等 bridge 服务上线后支持"从快照找回文件正确版本"）
 
 ## 权限与边界（上架声明）
 
