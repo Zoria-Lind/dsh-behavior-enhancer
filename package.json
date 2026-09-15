@@ -11,7 +11,8 @@
   "files": [
     "src",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node test/smoke.mjs"
@@ -39,5 +40,8 @@
     "error-recovery",
     "dsh-plugin",
     "deepseek-harness"
-  ]
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
