@@ -1,7 +1,7 @@
 # dsh bundle layer: mount the behavior-enhancer plugin.
 - insert:
     - id: behavior-enhancer
-      name: 'dsh-behavior-enhancer'
+      name: '@zoria-lind/dsh-behavior-enhancer'
       config:
         # v1.2(B1/B2/B3/B4/B5/B7):默认即启用;各节含义见 README
         writeDiffVerify:

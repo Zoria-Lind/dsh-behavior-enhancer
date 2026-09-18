@@ -4,6 +4,7 @@
 import { writeFileSync, existsSync, readFileSync, readdirSync, rmSync, mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
 import { resolveConfig } from '../src/config.js'
 import { createStats } from '../src/stats.js'
@@ -80,6 +81,32 @@ console.log('== config ==')
   threw = false
   try { resolveConfig({ postWriteCheck: { writeTools: ['write', 3] } }) } catch { threw = true }
   check('writeTools 非字符串数组报错', threw)
+}
+
+console.log('== npm 打包与 bundle patch 一致性(回归:Issue #2) ==')
+{
+  const root = new URL('..', import.meta.url)
+  const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'))
+  check('package name 为 scoped 名 @zoria-lind/dsh-behavior-enhancer', pkg.name === '@zoria-lind/dsh-behavior-enhancer')
+  const patchRel = pkg.dsh?.bundle?.patch
+  check('package.json 声明 dsh.bundle.patch', typeof patchRel === 'string' && patchRel.length > 0)
+  const patchUrl = new URL(patchRel.replace(/^\.\//, ''), root)
+  check('bundle patch 文件存在', existsSync(fileURLToPath(patchUrl)))
+  check('npm files 包含 cordis.patch.yml(发布包内 patch 生效)', Array.isArray(pkg.files) && pkg.files.includes('cordis.patch.yml'))
+  // 最小 YAML 提取(本项目 patch 结构固定:顶层 insert 列表 → id/name 行)
+  const lines = readFileSync(patchUrl, 'utf8').split(/\r?\n/)
+  const entries = []
+  let cur = null
+  for (const line of lines) {
+    const idM = line.match(/^\s*-\s+id:\s*['"]?([^'"]+?)['"]?\s*$/)
+    if (idM) { cur = { id: idM[1], name: null }; entries.push(cur); continue }
+    const nameM = line.match(/^\s*name:\s*['"]?([^'"]+?)['"]?\s*$/)
+    if (cur && nameM && cur.name === null) cur.name = nameM[1]
+  }
+  const beh = entries.find((e) => e.id === 'behavior-enhancer')
+  check('cordis.patch.yml 含 id: behavior-enhancer 条目', !!beh)
+  check('patch entry 的 name 与 package name 一致', beh?.name === pkg.name)
+  check('patch entry 的 name 保持 scoped 形式(防退回裸 dsh-behavior-enhancer)', typeof beh?.name === 'string' && beh.name.startsWith('@') && beh.name.includes('/'))
 }
 
 console.log('== lightParse 单元 ==')
