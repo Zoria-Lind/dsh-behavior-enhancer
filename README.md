@@ -22,17 +22,35 @@
 - "暂停其他进行中的调用"无 API，不支持；工具失败无核心重试，改为"降并行让模型逐步修正"；
 - 行为约束段是静态文本，保护 DeepSeek 前缀缓存（实测命中率 99.75%，动态内容会杀缓存）。
 
-## 安装
+## 安装 / 卸载
+
+**推荐:DSH 插件命令**(在 profile 内用 pnpm 安装,并自动把包名加入
+`dsh.profile.bundles`;卸载时一并移出,无需手改配置):
 
 ```bash
-# npm(包名带 scope;bundle patch 的 name 必须与之一致)
-npm install @zoria-lind/dsh-behavior-enhancer
+dsh plugin --profile web add @zoria-lind/dsh-behavior-enhancer
+dsh plugin --profile web remove @zoria-lind/dsh-behavior-enhancer   # 卸载
 ```
 
+**或手动安装**(在 profile 目录执行;装完需确认 `dsh.profile.bundles`
+包含 `@zoria-lind/dsh-behavior-enhancer`,卸载时同步删除):
+
 ```bash
-# 或本地路径(git 克隆方式)
+cd ~/.dsh/profiles/web
+pnpm add @zoria-lind/dsh-behavior-enhancer
+```
+
+**或本地路径**(git 克隆开发方式;`add` 换成目录路径,其余同上):
+
+```bash
 dsh plugin --profile web add ./dsh-behavior-enhancer
 ```
+
+> **为什么 `cordis.patch.yml` 里的 `name` 是带 scope 的全名**:patch 条目的
+> `name` 是 loader 解析**已安装包名**用的(与 `package.json` 的 `name` 一一
+> 对应),`id: behavior-enhancer` 才是配置树里的逻辑标识。npm/marketplace
+> 安装的包名带 scope,所以 `name` 必须与之一致;不一致时 loader 会报
+> `cannot resolve package`。用上面的 `dsh plugin add` 安装即自动一致。
 
 ## 配置
 
