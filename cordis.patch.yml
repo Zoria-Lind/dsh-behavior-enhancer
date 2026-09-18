@@ -2,20 +2,6 @@
 - insert:
     - id: behavior-enhancer
       name: '@zoria-lind/dsh-behavior-enhancer'
-      config:
-        # v1.2(B1/B2/B3/B4/B5/B7):默认即启用;各节含义见 README
-        writeDiffVerify:
-          enabled: true
-          gitStatusOnPwsh: true
-          writeDiffTimeoutMs: 5000
-          writeDiffMaxLines: 400
-        hardGate:
-          enabled: true
-          maxStrikes: 3
-          highRiskMode: 'ask'   # 无审批服务时内核把 ask 降级为 deny
-        verifyLoop:
-          enabled: true
-        compliance:
-          enabled: true
-          # 落盘改 D 盘(用户既定偏好:凡能放 D 盘就放 D 盘);绝对路径原样使用不展开 ~
-          statsPath: 'D:/dsh/behavior-enhancer/stats.json'
+      # 全部模块按代码默认值启用(各节含义见 README)。
+      # 个人配置覆盖(如落盘改 D 盘)放 profile 级 cordis.patch.yml:
+      # loader 对 id-targeted config 是整体浅替换,覆盖时需带全量 config。

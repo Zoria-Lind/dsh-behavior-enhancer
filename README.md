@@ -104,7 +104,7 @@ node test/smoke.mjs          # 单进程全量自检（无需 API），npm test 
 - **运行时依赖**：零 npm 依赖，无外部服务。
 - **失败边界**：所有模块 fail-open——状态文件损坏即丢弃重来；约束段是**软约束**（行为提示），强制收敛由并行池与 followup 两条独立路径保证，任何一条失效不影响 DSH 核心流程。
 - **已知风险**：`failureGuard` 通过 `agent.followup()` 注入提示，模型是否服从取决于模型本身；`behaviorPrompt.text` 若被改成动态内容会破坏 DeepSeek 前缀缓存（默认静态）。`postWriteCheck` 的轻量解析是启发式（非编译器），回滚恢复的是整个文件的写入前版本（文件写入前已存在的问题会一并带回）；检查范围仅 write/edit 工具，经 pwsh/bash 等命令写入的文件不检查。
-- **兼容范围**：完整开发与验证基于 DSH `0.1.1-rc.2`（Node ≥ 18）；`0.1.5-rc.1` 已按核心源码静态核验全部依赖 API、`0.1.5-rc.2` 经真实环境运行验证（Issue #2 报告），两者在 `package.json` 的 `dsh.compatibility.dshReleases` 中标为 `compatible`；`0.1.2`–`0.1.4` 中间版本尚未验证，仍标为 `unknown`。
+- **兼容范围**：支持基线 DSH `0.1.5-rc.x`（Node ≥ 18）：`0.1.5-rc.1` 已按核心源码静态核验全部依赖 API、`0.1.5-rc.2` 经真实环境运行验证（Issue #2 报告），在 `package.json` 的 `dsh.compatibility.dshReleases` 中标为 `compatible`；`≤0.1.4` 旧版不再跟踪支持。
 
 ## 开发
 
