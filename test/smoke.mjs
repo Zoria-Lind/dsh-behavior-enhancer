@@ -310,7 +310,7 @@ console.log('== failureGuard ==')
   check('B1:followup 收到 UserMessage(非 string,content 数组 + source.kind=plugin)',
     typeof msg1 === 'object' && msg1 !== null && !(typeof msg1 === 'string')
     && Array.isArray(msg1.content) && msg1.content[0]?.type === 'text'
-    && msg1.source?.kind === 'plugin' && msg1.source?.plugin === 'behavior-enhancer')
+    && msg1.source?.kind === 'plugin:behavior-enhancer')
   check('B1:提示文本仍含工具名与次数', /grep/.test(msg1.content[0].text) && /2 次/.test(msg1.content[0].text))
   await ctx.emit('tools/result', { name: 'grep', agent }, mkResult(true))
   await ctx.emit('tools/result', { name: 'grep', agent }, mkResult(true))
@@ -328,7 +328,7 @@ console.log('== failureGuard ==')
     if (llm && typeof llm.createUserMessage === 'function') {
       const real = llm.createUserMessage({
         content: [{ type: 'text', text: 'probe' }],
-        source: { kind: 'plugin', plugin: 'behavior-enhancer', form: 'notice', summary: 'failure-guard' },
+        source: { kind: 'plugin:behavior-enhancer', form: 'notice', summary: 'failure-guard' },
       })
       check('B1 探针:真内核 createUserMessage 产出冻结 UserMessage(role=user)',
         real?.role === 'user' && Array.isArray(real.content) && Object.isFrozen(real))
@@ -679,7 +679,7 @@ console.log('== verifyLoop(B4) ==')
   await writePost()
   await turnStop()
   check('B4:改文件无证据 → 提醒一次', steered.length === 1)
-  check('B4:steer 参数为 UserMessage 形状(plugin source)', steered[0]?.source?.kind === 'plugin' && Array.isArray(steered[0].content))
+  check('B4:steer 参数为 UserMessage 形状(plugin source)', steered[0]?.source?.kind === 'plugin:behavior-enhancer' && Array.isArray(steered[0].content))
   // 第二轮 → 不再提醒(单轮上限 1 次,防死循环)
   await turnStop()
   check('B4:第二轮不再提醒', steered.length === 1)

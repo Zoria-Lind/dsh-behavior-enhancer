@@ -61,7 +61,7 @@ export function createVerifyLoopModule(ctx, config, stats, deps = {}) {
       stats?.bump('verifyLoop.nudged', 1)
       agent.steer(createUserMessage({
         content: [{ type: 'text', text: '你刚改过文件但还没有验证证据:请运行项目自带的测试/构建命令,并贴出结果,再向用户汇报。' }],
-        source: { kind: 'plugin', plugin: 'behavior-enhancer', form: 'notice', summary: 'verify-once' },
+        source: { kind: 'plugin:behavior-enhancer', form: 'notice', summary: 'verify-once' },
       }))
     } catch (err) {
       console.warn(`[dsh-behavior-enhancer] verifyLoop steer 失败(${err?.message ?? err})`)

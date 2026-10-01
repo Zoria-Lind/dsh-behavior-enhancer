@@ -50,7 +50,7 @@ export function createFailureGuardModule(ctx, config, stats, deps = {}) {
     try {
       agent.followup(createUserMessage({
         content: [{ type: 'text', text }],
-        source: { kind: 'plugin', plugin: 'behavior-enhancer', form: 'notice', summary: 'failure-guard' },
+        source: { kind: 'plugin:behavior-enhancer', form: 'notice', summary: 'failure-guard' },
       }))
       stats?.bump('behavior.alerts', 1)
     } catch (err) {
