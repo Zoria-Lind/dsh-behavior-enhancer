@@ -88,6 +88,9 @@ console.log('== npm 打包与 bundle patch 一致性(回归:Issue #2) ==')
   const root = new URL('..', import.meta.url)
   const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'))
   check('package name 为 scoped 名 @zoria-lind/dsh-behavior-enhancer', pkg.name === '@zoria-lind/dsh-behavior-enhancer')
+  // 2026-10-02 回归:awesome-dsh-plugin 的 npm 回填靠 repository 字段关联 GitHub
+  // 条目;缺失会导致市场目录里 npm:null → 市场只装 git 旧版(实测事故)
+  check('package.json 声明 repository(市场 npm 回填依赖)', typeof pkg.repository?.url === 'string' && pkg.repository.url.includes('github.com/Zoria-Lind/dsh-behavior-enhancer'))
   const patchRel = pkg.dsh?.bundle?.patch
   check('package.json 声明 dsh.bundle.patch', typeof patchRel === 'string' && patchRel.length > 0)
   const patchUrl = new URL(patchRel.replace(/^\.\//, ''), root)
