@@ -43,19 +43,32 @@ import { createComplianceModule } from './modules/compliance.js'
 import { createStats } from './stats.js'
 
 export function apply(ctx, config = {}) {
-  const resolved = resolveConfig(config)
+  // 启动标记:第一行就写(连同传入的 config 与任何异常),用于确认加载链路卡在哪一步
+  const bootDir = join(homedir(), '.dsh', 'behavior-enhancer')
+  const bootFile = join(bootDir, 'boot.json')
+  const boot = (payload) => {
+    try {
+      mkdirSync(bootDir, { recursive: true })
+      writeFileSync(bootFile, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+    } catch { /* 诊断失败不影响加载 */ }
+  }
+  boot({ at: new Date().toISOString(), phase: 'enter', config: config ?? null })
+
+  let resolved
+  try {
+    resolved = resolveConfig(config)
+  } catch (err) {
+    boot({ at: new Date().toISOString(), phase: 'config-error', config: config ?? null, error: String(err?.message ?? err) })
+    throw err
+  }
   const stats = createStats()
 
-  // 启动标记:用于确认"插件是否在这个应用实例里真的加载了"(排查命令/面板不生效时的第一证据)
-  try {
-    const dir = join(homedir(), '.dsh', 'behavior-enhancer')
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'boot.json'), JSON.stringify({
-      at: new Date().toISOString(),
-      enabled: Object.keys(resolved).filter((k) => resolved[k] && resolved[k].enabled !== false),
-      disciplineInject: resolved.disciplineInject,
-    }, null, 2) + '\n', 'utf8')
-  } catch { /* 诊断失败不影响加载 */ }
+  boot({
+    at: new Date().toISOString(),
+    phase: 'ready',
+    enabled: Object.keys(resolved).filter((k) => resolved[k] && resolved[k].enabled !== false),
+    disciplineInject: resolved.disciplineInject,
+  })
 
   const modules = []
   if (resolved.behaviorPrompt.enabled) modules.push(createBehaviorPromptModule(ctx, resolved.behaviorPrompt, stats))
