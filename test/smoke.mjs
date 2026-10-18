@@ -130,8 +130,9 @@ console.log('== npm 打包与 bundle patch 一致性(回归:Issue #2) ==')
   // 2026-10-18 回归:旧区间以 <0.2.0-0 结尾,按 semver 把 0.2.0-rc.2(桌面端内核)排除在外,
   // 与 dshReleases 里声明的 compatible 自相矛盾
   const compat = pkg.dsh?.compatibility ?? {}
-  check('compat 区间覆盖 0.2.0-rc.x', typeof compat.dsh === 'string' && compat.dsh.includes('>=0.2.0-rc.0 <0.2.1-0'))
+  check('compat 区间覆盖 0.2.0-rc.x 与 0.2.1-rc.x', typeof compat.dsh === 'string' && compat.dsh.includes('>=0.2.0-rc.0 <0.2.2-0'))
   check('dshReleases 声明 0.2.0-rc.2 compatible', compat.dshReleases?.['0.2.0-rc.2'] === 'compatible')
+  check('dshReleases 声明 0.2.1-rc.2 compatible(当前桌面端)', compat.dshReleases?.['0.2.1-rc.2'] === 'compatible')
   check('版本已升到 1.3(项目记忆)', typeof pkg.version === 'string' && pkg.version.startsWith('1.3.'))
 }
 
@@ -801,6 +802,34 @@ console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
   }
 
   rmSync(tmpBase, { recursive: true, force: true })
+}
+
+console.log('== client 入口(P3-a 加载探针) ==')
+{
+  let captured = null
+  globalThis.window = { __ModuleLoader__: { load: (spec) => { captured = spec } } }
+  await import(new URL('../src/client.js', import.meta.url).href)
+  check('client 调用 __ModuleLoader__.load 且 id 正确',
+    !!captured && captured.id === '@zoria-lind/dsh-behavior-enhancer')
+  const fakeReact = { createElement: (...args) => ({ type: 'el', args }) }
+  const mod = captured.factory((name) => {
+    if (name === 'react') return fakeReact
+    throw new Error('unexpected require ' + name)
+  })
+  check('client 导出 apply/inject', typeof mod.apply === 'function' && Array.isArray(mod.inject))
+  const regs = []
+  let slotName = ''
+  const ctx = {
+    slots: {
+      inject: (name, cb) => { slotName = name; cb() },
+      register: (opts, comp) => { regs.push({ opts, comp }); return () => {} },
+    },
+  }
+  mod.apply(ctx)
+  check('client 注册进 settings.general.item 槽',
+    slotName === 'settings.general.item' && regs.length === 1 && regs[0].opts.name === 'settings.general.item')
+  check('client 行组件可渲染', typeof regs[0].comp === 'function' && !!regs[0].comp())
+  delete globalThis.window
 }
 
 console.log('== writeDiffVerify(B7) ==')

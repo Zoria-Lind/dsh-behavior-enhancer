@@ -6,7 +6,8 @@
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./client": "./src/client.js"
   },
   "files": [
     "src",
@@ -22,13 +23,18 @@
       "patch": "./cordis.patch.yml"
     },
     "pluginType": "feature",
+    "client": {
+      "inject": [],
+      "platform": "web"
+    },
     "compatibility": {
-      "dsh": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-rc.0 <0.1.7-0 || >=0.1.7-rc.0 <0.2.0-0 || >=0.2.0-rc.0 <0.2.1-0",
+      "dsh": ">=0.1.5-rc.1 <0.1.6-0 || >=0.1.6-rc.0 <0.1.7-0 || >=0.1.7-rc.0 <0.2.0-0 || >=0.2.0-rc.0 <0.2.2-0",
       "dshReleases": {
         "0.1.5-rc.1": "compatible",
         "0.1.5-rc.2": "compatible",
         "0.1.7-rc.1": "compatible",
-        "0.2.0-rc.2": "compatible"
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.2": "compatible"
       }
     }
   },
