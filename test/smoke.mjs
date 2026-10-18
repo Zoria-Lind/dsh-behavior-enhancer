@@ -718,6 +718,16 @@ console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
     check('di 内容变化后再注入', agent.steered.length === 2 && /主题:Z/.test(agent.steered[1].content[0].text))
     check('di 状态已落盘', existsSync(join(tmpBase, 's1.json')))
   }
+  // 1b) 内容变化 → 不必等到点,立刻重述(刚写完规则马上生效)
+  {
+    writeFileSync(agents, md, 'utf8')
+    const { ctx } = mk(join(tmpBase, 's1b.json'))
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    writeFileSync(agents, md.replace('- 流程:Y', '- 流程:W'), 'utf8')
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di 内容变化立刻重述(不等周期)', agent.steered.length === 2 && /流程:W/.test(agent.steered[1].content[0].text))
+  }
   // 2) 压缩后补注入(未到点、内容未变)
   {
     writeFileSync(agents, md, 'utf8')
@@ -728,14 +738,16 @@ console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
     await ctx.emit('agent/turn-stopping', { agent })
     check('di 压缩后补注入', agent.steered.length === 2)
   }
-  // 3) everyTurns 口径
+  // 3) everyTurns 口径(首轮先建立一次,之后按轮次)
   {
-    const { ctx } = mk(join(tmpBase, 's3.json'), { everyHours: 0, everyTurns: 2 })
+    const { ctx } = mk(join(tmpBase, 's3.json'), { everyHours: 0, everyTurns: 2, skipUnchanged: false })
     const agent = mkAgent()
     await ctx.emit('agent/turn-stopping', { agent })
-    check('di everyTurns 未到不动', agent.steered.length === 0)
+    check('di everyTurns 首轮建立一次', agent.steered.length === 1)
     await ctx.emit('agent/turn-stopping', { agent })
-    check('di everyTurns 两轮注入', agent.steered.length === 1)
+    check('di everyTurns 未到不动', agent.steered.length === 1)
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di everyTurns 两轮后再注入', agent.steered.length === 2)
   }
   // 4) 超限不注入
   {

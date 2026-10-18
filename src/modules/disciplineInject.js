@@ -5,6 +5,7 @@
 // 通道:agent.steer()(不是 followup——followup 会另起一轮,verifyLoop 注释里有实证);
 // 动态内容绝不进 systemPrompt section(会杀前缀缓存)。
 // 状态落盘:跨进程有效(桌面端重启不会一开机就轰炸);压缩后必补一次(补偿基线被摘要)。
+// 触发:到点(everyHours/everyTurns)/ 压缩后 / **纪律内容变化**(刚写完规则立刻生效)。
 // 缺节/超限时只 warn + 计数,绝不猜内容。
 
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -141,31 +142,30 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
       if (!agent) return undefined
       state.turnsSinceInject += 1
 
+      const cwd = agent?.session?.header?.cwd
+      const file = (typeof cwd === 'string' && cwd) ? findDisciplineFile(cwd, candidates) : null
+      let section = null
+      if (file) {
+        try { section = extractSection(readFileSync(file, 'utf8'), config.heading) } catch { section = null }
+      }
+
       const hoursDue = everyHours > 0 && now() - state.lastInjectAt >= everyHours * 3600 * 1000
       const turnsDue = everyTurns > 0 && state.turnsSinceInject >= everyTurns
       const compactDue = config.compactReinject !== false && state.compactedSinceLastInject
-      if (!hoursDue && !turnsDue && !compactDue) {
+      // 纪律刚写/刚改也立刻重述(否则补完规则要干等一个周期;首次 hash 为空时同样命中)
+      const changed = !!section && section.hash !== state.lastDigestHash
+      if (!hoursDue && !turnsDue && !compactDue && !changed) {
         persist() // 轮次计数也要落盘(否则重启后 everyTurns 会漂)
         return undefined
       }
 
-      const cwd = agent?.session?.header?.cwd
       if (typeof cwd !== 'string' || !cwd) {
         stats?.bump('discipline.noCwd', 1)
         advance()
         return undefined
       }
-      const file = findDisciplineFile(cwd, candidates)
       if (!file) {
         stats?.bump('discipline.noFile', 1)
-        advance()
-        return undefined
-      }
-      let section
-      try {
-        section = extractSection(readFileSync(file, 'utf8'), config.heading)
-      } catch (err) {
-        console.warn(`[dsh-behavior-enhancer] 读取 ${file} 失败(${err?.message ?? err}),本轮跳过纪律重述`)
         advance()
         return undefined
       }
