@@ -45,14 +45,22 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // 宿主已服务的命名空间目录(诊断用):configForms.describe()
+    // 宿主已服务的命名空间目录(诊断用):不 stringify(代理对象的 toJSON 需要额外注入)
     function servedNamespaces() {
       try {
         if (!clientCtx || !clientCtx.configForms || typeof clientCtx.configForms.describe !== 'function') return 'no-describe'
         const d = clientCtx.configForms.describe()
-        const list = Array.isArray(d) ? d : (d && Array.isArray(d.namespaces) ? d.namespaces : d)
-        const text = JSON.stringify(list)
-        return text ? text.slice(0, 240) : 'empty'
+        if (Array.isArray(d)) {
+          return d.map((x) => (x && typeof x === 'object' ? (x.ns ?? x.namespace ?? '?') : String(x))).join(',') || 'empty'
+        }
+        if (d && typeof d === 'object') {
+          const keys = Object.keys(d).join('|')
+          const arr = Array.isArray(d.namespaces)
+            ? d.namespaces.map((x) => (x && typeof x === 'object' ? (x.ns ?? x.namespace ?? '?') : String(x))).join(',')
+            : ''
+          return 'keys=' + keys + (arr ? ' ns=' + arr : '')
+        }
+        return String(d)
       } catch (e) { return 'describe-error:' + (e && e.message ? e.message : e) }
     }
 

@@ -95,6 +95,25 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
   try {
     ctx.inject?.(['settings'], (sctx) => {
       liveSettings = sctx?.settings ?? null
+      // 诊断:把宿主服务了哪些命名空间落到文件(客户端 describe 会碰到 cordis 代理)
+      try {
+        const debugFile = expandHome('~/.dsh/behavior-enhancer/settings-debug.json')
+        let payload
+        try {
+          const list = liveSettings && typeof liveSettings.describe === 'function' ? liveSettings.describe() : []
+          payload = {
+            at: new Date().toISOString(),
+            entryId,
+            hasDescribe: !!(liveSettings && typeof liveSettings.describe === 'function'),
+            hasConfigure: !!(liveSettings && typeof liveSettings.configure === 'function'),
+            descriptors: list.map((d) => ({ ns: d?.ns, hasValue: d?.value !== undefined, writable: d?.writable })),
+          }
+        } catch (e) {
+          payload = { at: new Date().toISOString(), entryId, describeError: String(e?.message ?? e) }
+        }
+        mkdirSync(dirname(debugFile), { recursive: true })
+        writeFileSync(debugFile, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+      } catch { /* 诊断失败不影响功能 */ }
       try {
         if (liveSettings && typeof liveSettings.configure === 'function' && typeof ctx.effect === 'function') {
           ctx.effect(() => {
