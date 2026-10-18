@@ -52,6 +52,35 @@ export const DEFAULT_CONFIG = {
     snapshotDir: '~/.dsh-memory/files',
     autoRollback: true,          // 询问不可用/超时时:true=自动回滚(fail-safe),false=保留写入
   },
+  // 项目记忆写后校验(v1.3):模型写入 AGENTS.md/CLAUDE.md/.local 后做建议性检查。
+  // 只追加提示文本,绝不回滚、不注入、不新增存储。注入归内核 agent-instructions,
+  // 跨项目/用户级记忆池归 dsh-ecolink。
+  projectMemory: {
+    enabled: true,
+    writeTools: ['write', 'edit'],
+    fileNames: ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md'],
+    maxBytes: 65536,             // 对齐内核 maxBytes(按单文件计;内核按整批渲染计)
+    maxLineLength: 200,          // 字符数
+    duplicateMinLength: 8,       // 短行(表格分隔线等)不计重复
+    shrinkRatio: 0.3,            // 写后 < 写前 30% 判定缩水
+    shrinkMinBytes: 2048,        // 写前小于该值不判缩水
+    checkPathLeak: true,         // 主目录/用户名/盘符绝对路径泄漏
+  },
+  // 项目纪律周期重述(v1.3):内核只在首请求注入一次 AGENTS.md 基线,压缩会吃掉它;
+  // 本模块按"距上次 N 小时 / N 轮"惰性判定,到点用 agent.steer 重述 `## 项目纪律` 节。
+  // 动态内容绝不进 systemPrompt section(会杀前缀缓存)。
+  disciplineInject: {
+    enabled: true,
+    heading: '## 项目纪律',       // 只重述这一节;缺节/超限只 warn,不猜内容
+    candidates: ['AGENTS.md', 'CLAUDE.md'], // 从会话 cwd 向上找最近一份
+    everyHours: 3,              // 0 = 关(只按轮次);两键都 0 = 完全静默
+    everyTurns: 0,              // 0 = 关(只按时间)
+    maxDigestBytes: 1600,       // 节体超过即不重述并提示精简
+    skipUnchanged: true,        // 内容没变且未压缩过 → 跳过,只推进周期
+    compactReinject: true,      // 压缩后必补一次(补偿基线被摘要)
+    pointer: '',                // 非空:重述末尾追加一行(如进度索引路径)
+    stateFile: '~/.dsh/behavior-enhancer/discipline-state.json',
+  },
   // B7 变更核验:write 追加 meta.diffs 摘要;pwsh 做前后差集(git status --porcelain),
   // 只报本次新增的变更,删除行标 ⚠。扁平键,全部走 resolveSection 浅校验。
   writeDiffVerify: {
@@ -89,9 +118,11 @@ const NUMERIC_KEYS = new Set([
   'contextWindowFallback', 'maxFailures',
   'maxFileBytes', 'keepBackups', 'askThreshold', 'askTimeoutMs',
   'writeDiffTimeoutMs', 'writeDiffMaxLines', 'disciplineMaxBytes',
+  'maxBytes', 'maxLineLength', 'duplicateMinLength', 'shrinkRatio', 'shrinkMinBytes',
+  'everyHours', 'everyTurns', 'maxDigestBytes',
 ])
-const STRING_KEYS = new Set(['text', 'followupMessage', 'feedbackText', 'snapshotDir', 'highRiskMode', 'statsPath', 'disciplinePreset'])
-const STRING_ARRAY_KEYS = new Set(['writeTools', 'checkExtensions', 'disciplineIncludeTags'])
+const STRING_KEYS = new Set(['text', 'followupMessage', 'feedbackText', 'snapshotDir', 'highRiskMode', 'statsPath', 'disciplinePreset', 'heading', 'pointer', 'stateFile'])
+const STRING_ARRAY_KEYS = new Set(['writeTools', 'checkExtensions', 'disciplineIncludeTags', 'fileNames', 'candidates'])
 
 function assertNumber(name, value, { min = 0, max = Infinity } = {}) {
   if (!Number.isFinite(value) || value < min || value > max) {
@@ -107,7 +138,8 @@ function resolveSection(section, defaults) {
         throw new Error(`dsh-behavior-enhancer config: unknown key "${key}" (allowed: ${Object.keys(defaults).join(', ')})`)
       }
       if (NUMERIC_KEYS.has(key)) {
-        if (key === 'complexRatio') assertNumber(key, value, { min: 0, max: 1 })
+        if (key === 'complexRatio' || key === 'shrinkRatio') assertNumber(key, value, { min: 0, max: 1 })
+        else if (key === 'maxBytes' || key === 'maxLineLength') assertNumber(key, value, { min: 1 })
         else assertNumber(key, value)
       } else if (STRING_KEYS.has(key)) {
         if (typeof value !== 'string') throw new Error(`dsh-behavior-enhancer config: "${key}" must be a string`)
@@ -131,6 +163,8 @@ export function resolveConfig(config = {}) {
     parallelConvergence: resolveSection(config.parallelConvergence, DEFAULT_CONFIG.parallelConvergence),
     failureGuard: resolveSection(config.failureGuard, DEFAULT_CONFIG.failureGuard),
     postWriteCheck: resolveSection(config.postWriteCheck, DEFAULT_CONFIG.postWriteCheck),
+    projectMemory: resolveSection(config.projectMemory, DEFAULT_CONFIG.projectMemory),
+    disciplineInject: resolveSection(config.disciplineInject, DEFAULT_CONFIG.disciplineInject),
     writeDiffVerify: resolveSection(config.writeDiffVerify, DEFAULT_CONFIG.writeDiffVerify),
     hardGate: resolveSection(config.hardGate, DEFAULT_CONFIG.hardGate),
     verifyLoop: resolveSection(config.verifyLoop, DEFAULT_CONFIG.verifyLoop),

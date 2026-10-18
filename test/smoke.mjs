@@ -12,6 +12,8 @@ import { createBehaviorPromptModule } from '../src/modules/behaviorPrompt.js'
 import { createParallelConvergenceModule } from '../src/modules/parallelConvergence.js'
 import { createFailureGuardModule } from '../src/modules/failureGuard.js'
 import { createPostWriteCheckModule, lightParse } from '../src/modules/postWriteCheck.js'
+import { createProjectMemoryModule, checkMemoryContent, isMemoryFilePath } from '../src/modules/projectMemory.js'
+import { createDisciplineInjectModule, extractSection, findDisciplineFile } from '../src/modules/disciplineInject.js'
 import { createWriteDiffVerifyModule, findGitRootsFromCommand } from '../src/modules/writeDiffVerify.js'
 import { createHardGateModule } from '../src/modules/hardGate.js'
 import { createVerifyLoopModule } from '../src/modules/verifyLoop.js'
@@ -75,12 +77,27 @@ console.log('== config ==')
   check('v1.1 keepBackups 默认 5', cfg.postWriteCheck.keepBackups === 5)
   check('v1.1 快照目录默认 ~/.dsh-memory/files', cfg.postWriteCheck.snapshotDir === '~/.dsh-memory/files')
   check('memory_bridge 占位节 enabled=false', cfg.memory_bridge.enabled === false)
+  check('v1.3 projectMemory 默认开启', cfg.projectMemory.enabled === true)
+  check('v1.3 projectMemory maxBytes 65536', cfg.projectMemory.maxBytes === 65536)
+  check('v1.3 projectMemory 文件名为内核四个候选',
+    JSON.stringify(cfg.projectMemory.fileNames) === JSON.stringify(['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']))
+  check('v1.3 disciplineInject 默认开启', cfg.disciplineInject.enabled === true)
+  check('v1.3 disciplineInject 默认每 3 小时(轮次关)', cfg.disciplineInject.everyHours === 3 && cfg.disciplineInject.everyTurns === 0)
+  check('v1.3 disciplineInject skipUnchanged 默认 true', cfg.disciplineInject.skipUnchanged === true)
+  check('v1.3 disciplineInject 默认只认 AGENTS.md/CLAUDE.md',
+    JSON.stringify(cfg.disciplineInject.candidates) === JSON.stringify(['AGENTS.md', 'CLAUDE.md']))
   let threw = false
   try { resolveConfig({ behaviorPrompt: { bogus: 1 } }) } catch { threw = true }
   check('未知键报错', threw)
   threw = false
   try { resolveConfig({ postWriteCheck: { writeTools: ['write', 3] } }) } catch { threw = true }
   check('writeTools 非字符串数组报错', threw)
+  threw = false
+  try { resolveConfig({ projectMemory: { bogus: 1 } }) } catch { threw = true }
+  check('projectMemory 未知键报错', threw)
+  threw = false
+  try { resolveConfig({ projectMemory: { shrinkRatio: 1.5 } }) } catch { threw = true }
+  check('projectMemory shrinkRatio 越界报错', threw)
 }
 
 console.log('== npm 打包与 bundle patch 一致性(回归:Issue #2) ==')
@@ -110,6 +127,12 @@ console.log('== npm 打包与 bundle patch 一致性(回归:Issue #2) ==')
   check('cordis.patch.yml 含 id: behavior-enhancer 条目', !!beh)
   check('patch entry 的 name 与 package name 一致', beh?.name === pkg.name)
   check('patch entry 的 name 保持 scoped 形式(防退回裸 dsh-behavior-enhancer)', typeof beh?.name === 'string' && beh.name.startsWith('@') && beh.name.includes('/'))
+  // 2026-10-18 回归:旧区间以 <0.2.0-0 结尾,按 semver 把 0.2.0-rc.2(桌面端内核)排除在外,
+  // 与 dshReleases 里声明的 compatible 自相矛盾
+  const compat = pkg.dsh?.compatibility ?? {}
+  check('compat 区间覆盖 0.2.0-rc.x', typeof compat.dsh === 'string' && compat.dsh.includes('>=0.2.0-rc.0 <0.2.1-0'))
+  check('dshReleases 声明 0.2.0-rc.2 compatible', compat.dshReleases?.['0.2.0-rc.2'] === 'compatible')
+  check('版本已升到 1.3(项目记忆)', typeof pkg.version === 'string' && pkg.version.startsWith('1.3.'))
 }
 
 console.log('== lightParse 单元 ==')
@@ -151,6 +174,9 @@ console.log('== behaviorPrompt B2(纪律数据层) ==')
   const cleanup1 = createBehaviorPromptModule(makeFakeCtx({ systemPrompt: spSvc }), baseCfg, createStats())
   check('B2:默认预设注入批量验证/证据条目', /批量操作前先验证/.test(sections[0].text) && /证据与诚实/.test(sections[0].text))
   check('B2:内核已强制的两条不再重复(先读后写/同类修改串行)', !/先读后写/.test(sections[0].text) && !/同类修改串行/.test(sections[0].text))
+  // v1.3 验收第 9 条:静态纪律必须含「进度即记」,且不写具体路径/日期
+  check('B2:静态纪律含「进度即记」(每完成一个进度就更新进度文件)', /进度即记/.test(sections[0].text) && /每完成一个进度/.test(sections[0].text))
+  check('B2:进度即记不含具体路径/日期', !/[A-Za-z]:[\\/]|\.md\b|\d{4}-\d{2}-\d{2}/.test(sections[0].text.split('\n').find((l) => l.includes('进度即记')) ?? ''))
   cleanup1()
 
   // 预设切换:strict 增加安全条目
@@ -520,6 +546,246 @@ console.log('== postWriteCheck 写后检查(v1.1) ==')
     await ctx2.emit('tools/execute', execNoCwd, async () => ({ isError: false, value: 'ok' }))
     const d2 = await ctx2.emit('tools/post-execute', execNoCwd, { isError: false, content: [{ type: 'text', text: 'ok' }] }, async () => ({ kind: 'accept', content: [{ type: 'text', text: 'wrote' }] }))
     check('B1:相对路径无会话 cwd → 显式跳过不崩', d2.kind === 'accept' && d2.content[0].text === 'wrote')
+  }
+
+  rmSync(tmpBase, { recursive: true, force: true })
+}
+
+console.log('== projectMemory 项目记忆写后校验(v1.3) ==')
+{
+  const tmpBase = mkdtempSync(join(tmpdir(), 'beh-pm-'))
+  const cfg = resolveConfig({}).projectMemory
+  const leakOpts = { homedir: 'C:\\Users\\tester', username: 'tester', checkPathLeak: true }
+  const agentsPath = join(tmpBase, 'AGENTS.md')
+  const dupContent = '- 记住:构建要用 pnpm\n- 另一条事实\n- 记住:构建要用 pnpm\n'
+  const memFlow = async (ctx, path, content, { isError = false, cwd, noWrite = false, writeTo = null, name = 'write' } = {}) => {
+    const exec = { name, arguments: { file_path: path } }
+    if (cwd) exec.agent = { id: 'a1', session: { header: { cwd } } }
+    await ctx.emit('tools/execute', exec, async () => {
+      if (!isError && !noWrite) writeFileSync(writeTo ?? path, content, 'utf8')
+      return { isError, value: 'ok' }
+    })
+    return ctx.emit('tools/post-execute', exec,
+      { isError, content: [{ type: 'text', text: 'ok' }] },
+      async () => ({ kind: 'accept', content: [{ type: 'text', text: 'base' }] }))
+  }
+
+  // 纯函数:文件名匹配
+  check('pm 记忆文件名命中(四个候选)',
+    ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md'].every((n) => isMemoryFilePath(join(tmpBase, n), cfg)))
+  check('pm 文件名大小写不敏感', isMemoryFilePath('C:\\proj\\AGENTS.MD', cfg) && isMemoryFilePath('C:\\proj\\agents.md', cfg))
+  check('pm 非记忆文件不命中', !isMemoryFilePath('C:\\proj\\README.md', cfg) && !isMemoryFilePath('C:\\proj\\notes.md', cfg))
+
+  // 纯函数:内容检查
+  const dupIssue = checkMemoryContent(dupContent, cfg).issues.find((i) => i.kind === 'duplicate')
+  check('pm 重复行检出且报第二次出现行号', !!dupIssue && dupIssue.line === 3 && /重复/.test(dupIssue.msg))
+  check('pm 短行不计重复', checkMemoryContent('---\n---\n', cfg).issues.every((i) => i.kind !== 'duplicate'))
+  check('pm 体量超限检出', checkMemoryContent('x'.repeat(30), { ...cfg, maxBytes: 10 }).issues.some((i) => i.kind === 'size'))
+  check('pm 超长行检出', checkMemoryContent('a'.repeat(250), cfg).issues.some((i) => i.kind === 'long-line'))
+  check('pm 泄漏检出(主目录)', checkMemoryContent('see C:\\Users\\tester\\secret.txt', leakOpts).issues.some((i) => i.kind === 'leak'))
+  check('pm 泄漏检出(盘符绝对路径)', checkMemoryContent('see D:\\private\\notes.md', leakOpts).issues.some((i) => i.kind === 'leak'))
+  check('pm URL/相对路径不误报', checkMemoryContent('see https://example.com/x and docs/notes.md', leakOpts).issues.every((i) => i.kind !== 'leak'))
+  check('pm 缩水检出', checkMemoryContent('只剩两行\n', { ...cfg, previousSize: 5000 }).issues.some((i) => i.kind === 'shrink'))
+  check('pm 小文件不判缩水', checkMemoryContent('x\n', { ...cfg, previousSize: 1000 }).issues.every((i) => i.kind !== 'shrink'))
+
+  // 模块:干净写入
+  {
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createProjectMemoryModule(ctx, cfg, stats, leakOpts)
+    const d = await memFlow(ctx, agentsPath, '- 事实一:构建用 pnpm\n- 事实二:测试跑 node test/smoke.mjs\n')
+    const c = stats.snapshot().counters
+    check('pm 干净写入不追加报告', d.content.length === 1 && d.content[0].text === 'base')
+    check('pm checked 计数且无 reports', c['projectMemory.checked'] === 1 && c['projectMemory.reports'] === undefined)
+  }
+  // 模块:重复行 → 追加(不是替换)
+  {
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createProjectMemoryModule(ctx, cfg, stats, leakOpts)
+    const d = await memFlow(ctx, agentsPath, dupContent)
+    check('pm 报告追加且原 content 保留', d.content.length === 2 && d.content[0].text === 'base')
+    check('pm 报告文案含标记与问题', /项目记忆检查/.test(d.content[1].text) && /重复/.test(d.content[1].text))
+    check('pm reports/issues 计数', stats.snapshot().counters['projectMemory.reports'] === 1 && stats.snapshot().counters['projectMemory.issues'] >= 1)
+  }
+  // 模块:泄漏只提示,绝不回滚
+  {
+    const ctx = makeFakeCtx()
+    createProjectMemoryModule(ctx, cfg, createStats(), leakOpts)
+    const leakContent = '部署目录:C:\\Users\\tester\\app\n'
+    const d = await memFlow(ctx, agentsPath, leakContent)
+    check('pm 泄漏只提示', d.content.length === 2 && /路径|本机/.test(d.content[1].text))
+    check('pm 绝不回滚记忆文件', readFileSync(agentsPath, 'utf8') === leakContent)
+  }
+  // 模块:非记忆文件 / 写失败 / 相对路径
+  {
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createProjectMemoryModule(ctx, cfg, stats, leakOpts)
+    const d = await memFlow(ctx, join(tmpBase, 'README.md'), dupContent)
+    check('pm 非记忆文件忽略', d.content.length === 1 && stats.snapshot().counters['projectMemory.checked'] === undefined)
+    const d2 = await memFlow(ctx, agentsPath, dupContent, { isError: true })
+    check('pm 写失败不检查', d2.content.length === 1 && stats.snapshot().counters['projectMemory.checked'] === undefined)
+    const relDir = join(tmpBase, 'sesscwd')
+    mkdirSync(relDir, { recursive: true })
+    const d3 = await memFlow(ctx, 'AGENTS.md', dupContent, { cwd: relDir, writeTo: join(relDir, 'AGENTS.md') })
+    check('pm 相对路径按会话 cwd 校验', d3.content.length === 2 && existsSync(join(relDir, 'AGENTS.md')))
+    const d4 = await memFlow(ctx, 'AGENTS.md', dupContent, { noWrite: true })
+    check('pm 相对路径无 cwd → 跳过不崩', d4.kind === 'accept' && d4.content.length === 1)
+  }
+  // 模块:缩水(同进程内两次写)
+  {
+    const ctx = makeFakeCtx()
+    createProjectMemoryModule(ctx, cfg, createStats(), leakOpts)
+    const big = Array.from({ length: 120 }, (_, i) => `- 第 ${i + 1} 条事实:某个足够长的项目说明`).join('\n')
+    await memFlow(ctx, agentsPath, big)
+    const d = await memFlow(ctx, agentsPath, '- 只剩一条\n')
+    check('pm 缩水告警', d.content.length === 2 && /缩水|不足原来/.test(d.content[1].text))
+  }
+  // enabled=false:空转
+  {
+    const ctx = makeFakeCtx()
+    ctx.on('tools/execute', async (exec, next) => next())
+    ctx.on('tools/post-execute', async (exec, result, next) => next())
+    const cleanup = createProjectMemoryModule(ctx, { ...cfg, enabled: false }, createStats(), leakOpts)
+    const d = await memFlow(ctx, agentsPath, dupContent)
+    check('pm enabled=false 空转', d.content.length === 1)
+    cleanup()
+  }
+  // cleanup:解绑后不再检查
+  {
+    const ctx = makeFakeCtx()
+    ctx.on('tools/execute', async (exec, next) => next())
+    ctx.on('tools/post-execute', async (exec, result, next) => next())
+    const stats = createStats()
+    const cleanup = createProjectMemoryModule(ctx, cfg, stats, leakOpts)
+    cleanup()
+    const d = await memFlow(ctx, agentsPath, dupContent)
+    check('pm cleanup 后不再检查', d.content.length === 1 && stats.snapshot().counters['projectMemory.checked'] === undefined)
+  }
+
+  rmSync(tmpBase, { recursive: true, force: true })
+}
+
+console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
+{
+  const tmpBase = mkdtempSync(join(tmpdir(), 'beh-di-'))
+  const agents = join(tmpBase, 'AGENTS.md')
+  const fakeCreateUserMessage = (input) => ({ role: 'user', content: input.content, source: input.source })
+  let fakeNow = 1_000_000_000_000
+  const baseCfg = resolveConfig({}).disciplineInject
+  const mkAgent = () => ({ id: 'a1', session: { header: { cwd: tmpBase } }, steered: [], steer(m) { this.steered.push(m) } })
+  const mk = (sf, over = {}) => {
+    const ctx = makeFakeCtx()
+    const stats = createStats()
+    createDisciplineInjectModule(ctx, { ...baseCfg, ...over }, stats,
+      { createUserMessage: fakeCreateUserMessage, now: () => fakeNow, stateFile: sf })
+    return { ctx, stats }
+  }
+  const md = '## 项目纪律\n- 主题:X\n- 流程:Y\n## 其他\n- 不该出现\n'
+  writeFileSync(agents, md, 'utf8')
+
+  // 纯函数
+  const sec = extractSection(md, '## 项目纪律')
+  check('di 取节只到下一条同级标题', !!sec && /主题:X/.test(sec.text) && !/不该出现/.test(sec.text))
+  check('di 缺节返回 null', extractSection(md, '## 不存在的节') === null)
+  check('di 空节返回 null', extractSection('## 项目纪律\n\n## 其他\n', '## 项目纪律') === null)
+  check('di 从 cwd 向上找到 AGENTS.md', findDisciplineFile(tmpBase) === agents)
+
+  // 1) 到点注入 / 未到点 / 未变跳过 / 变化再注入
+  {
+    const { ctx, stats } = mk(join(tmpBase, 's1.json'))
+    const agent = mkAgent()
+    const r = await ctx.emit('agent/turn-stopping', { agent })
+    check('di 首轮即注入(无状态视为到期)', agent.steered.length === 1)
+    check('di 注入只含纪律节', /主题:X/.test(agent.steered[0].content[0].text) && !/不该出现/.test(agent.steered[0].content[0].text))
+    check('di steer 收到 UserMessage 形状', agent.steered[0].source?.kind === 'plugin:behavior-enhancer' && Array.isArray(agent.steered[0].content))
+    check('di serial 事件返回 undefined', r === undefined)
+    check('di injected 计数', stats.snapshot().counters['discipline.injected'] === 1)
+
+    fakeNow += 60 * 1000
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di 未到点不注入', agent.steered.length === 1)
+
+    fakeNow += 4 * 3600 * 1000
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di skipUnchanged:内容未变不重复注入', agent.steered.length === 1)
+    check('di skippedUnchanged 计数', stats.snapshot().counters['discipline.skippedUnchanged'] === 1)
+
+    writeFileSync(agents, md.replace('- 主题:X', '- 主题:Z'), 'utf8')
+    fakeNow += 4 * 3600 * 1000
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di 内容变化后再注入', agent.steered.length === 2 && /主题:Z/.test(agent.steered[1].content[0].text))
+    check('di 状态已落盘', existsSync(join(tmpBase, 's1.json')))
+  }
+  // 2) 压缩后补注入(未到点、内容未变)
+  {
+    writeFileSync(agents, md, 'utf8')
+    const { ctx } = mk(join(tmpBase, 's2.json'))
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    await ctx.emit('compaction/end')
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di 压缩后补注入', agent.steered.length === 2)
+  }
+  // 3) everyTurns 口径
+  {
+    const { ctx } = mk(join(tmpBase, 's3.json'), { everyHours: 0, everyTurns: 2 })
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di everyTurns 未到不动', agent.steered.length === 0)
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di everyTurns 两轮注入', agent.steered.length === 1)
+  }
+  // 4) 超限不注入
+  {
+    const { ctx, stats } = mk(join(tmpBase, 's4.json'), { maxDigestBytes: 10 })
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di 节超 maxDigestBytes 不注入', agent.steered.length === 0 && stats.snapshot().counters['discipline.oversize'] === 1)
+  }
+  // 5) 缺节
+  {
+    writeFileSync(agents, '## 别的\n- 内容\n', 'utf8')
+    const { ctx, stats } = mk(join(tmpBase, 's5.json'))
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di 缺节不注入且计数', agent.steered.length === 0 && stats.snapshot().counters['discipline.noSection'] === 1)
+  }
+  // 6) 两个触发器都关 → 完全静默
+  {
+    writeFileSync(agents, md, 'utf8')
+    const ctx = makeFakeCtx()
+    ctx.on('agent/turn-stopping', () => undefined)
+    const stats = createStats()
+    createDisciplineInjectModule(ctx, { ...baseCfg, everyHours: 0, everyTurns: 0 }, stats,
+      { createUserMessage: fakeCreateUserMessage, now: () => fakeNow, stateFile: join(tmpBase, 's6.json') })
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di 双 0 完全静默', agent.steered.length === 0 && stats.snapshot().counters['discipline.injected'] === undefined)
+  }
+  // 7) 状态落盘 → 新实例未到点不重复
+  {
+    writeFileSync(agents, md, 'utf8')
+    const sf = join(tmpBase, 's7.json')
+    const a = mk(sf)
+    const agent1 = mkAgent()
+    await a.ctx.emit('agent/turn-stopping', { agent: agent1 })
+    const b = mk(sf)
+    const agent2 = mkAgent()
+    await b.ctx.emit('agent/turn-stopping', { agent: agent2 })
+    check('di 跨实例未到点不重复注入', agent1.steered.length === 1 && agent2.steered.length === 0)
+  }
+  // 8) cleanup 后不再注入
+  {
+    const ctx = makeFakeCtx()
+    ctx.on('agent/turn-stopping', () => undefined)
+    const cleanup = createDisciplineInjectModule(ctx, baseCfg, createStats(),
+      { createUserMessage: fakeCreateUserMessage, now: () => fakeNow, stateFile: join(tmpBase, 's8.json') })
+    cleanup()
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di cleanup 后不再注入', agent.steered.length === 0)
   }
 
   rmSync(tmpBase, { recursive: true, force: true })

@@ -37,6 +37,13 @@ export const DISCIPLINE_ENTRIES = [
     tags: ['quality'],
     text: '上下文已压缩时:若历史被压缩为摘要(compacted-summary),对细节有疑问先查日志或重新获取,不要臆造。',
   },
+  {
+    id: 'progress-jot',
+    level: 'soft',
+    scope: 'global',
+    tags: ['quality', 'memory'],
+    text: '进度即记:每完成一个进度(一个可验收的小目标)就立刻更新项目进度文件,写清已完成/当前/下一步;不要攒到会话结束再补。',
+  },
 ]
 
 // strict 预设增量(仍为 soft;硬约束需要 check 实现,一期不承诺)
