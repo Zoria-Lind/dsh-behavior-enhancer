@@ -25,6 +25,9 @@
 // 与核心的关系:核心已保证写操作 exclusive(edit/write/pwsh 串行)、
 // read/read_image 并行安全;本插件只动池上限,不碰工具定义。
 
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { DEFAULT_CONFIG, resolveConfig } from './config.js'
 import { createBehaviorPromptModule } from './modules/behaviorPrompt.js'
 import { createParallelConvergenceModule } from './modules/parallelConvergence.js'
@@ -42,6 +45,17 @@ import { createStats } from './stats.js'
 export function apply(ctx, config = {}) {
   const resolved = resolveConfig(config)
   const stats = createStats()
+
+  // 启动标记:用于确认"插件是否在这个应用实例里真的加载了"(排查命令/面板不生效时的第一证据)
+  try {
+    const dir = join(homedir(), '.dsh', 'behavior-enhancer')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'boot.json'), JSON.stringify({
+      at: new Date().toISOString(),
+      enabled: Object.keys(resolved).filter((k) => resolved[k] && resolved[k].enabled !== false),
+      disciplineInject: resolved.disciplineInject,
+    }, null, 2) + '\n', 'utf8')
+  } catch { /* 诊断失败不影响加载 */ }
 
   const modules = []
   if (resolved.behaviorPrompt.enabled) modules.push(createBehaviorPromptModule(ctx, resolved.behaviorPrompt, stats))
