@@ -7,6 +7,9 @@
 // 数据通道:ctx.configForms.get(<profile 条目 id>) —— 快照 { status, value, base, user, revision, writable };
 // 写入用 mutate([{ op:'set', path:[...], value }])(set(field) 只支持顶层字段,我们是嵌套配置)。
 // 服务端必须导出带 .volatile() 的 Config(见 src/configSchema.js),否则写会被 isVolatilePath 拒绝。
+//
+// 样式:只用宿主主题 token(--dsw-alias-*),不写死颜色;开关用宿主规范 role="switch" + aria-checked,
+// 轨道/滑块分别取 brand-primary 与 --dsw-alias-switch-thumb(宿主自己的开关就是这么配的)。
 
 window.__ModuleLoader__.load({
   id: '@zoria-lind/dsh-behavior-enhancer',
@@ -31,12 +34,29 @@ window.__ModuleLoader__.load({
       try { form = clientCtx.configForms.get(ENTRY_ID) } catch { form = null }
     }
 
-    const styles = {
-      wrap: { padding: '10px 0', fontSize: '13px', lineHeight: 1.7 },
-      title: { fontWeight: 600, marginBottom: '4px' },
-      hint: { opacity: 0.65, fontSize: '12px' },
-      row: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' },
-      num: { width: '64px', padding: '2px 6px' },
+    const css = {
+      wrap: { padding: '12px 0', lineHeight: 1.6 },
+      title: { fontWeight: 600, color: 'var(--dsw-alias-label-primary)', marginBottom: '6px' },
+      hint: { color: 'var(--dsw-alias-label-tertiary)', fontSize: '12px', marginTop: '6px' },
+      row: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' },
+      label: { color: 'var(--dsw-alias-label-secondary)' },
+      switch: {
+        position: 'relative', flex: 'none', width: '36px', height: '20px', padding: 0,
+        border: 'none', borderRadius: '10px', cursor: 'pointer', transition: 'background 120ms',
+      },
+      thumb: {
+        position: 'absolute', top: '2px', width: '16px', height: '16px', borderRadius: '50%',
+        background: 'var(--dsw-alias-switch-thumb)', transition: 'left 120ms',
+        boxShadow: '0 1px 2px rgba(0,0,0,.18)',
+      },
+      num: {
+        width: '64px', padding: '3px 8px', borderRadius: '6px',
+        border: '1px solid var(--dsw-alias-border-l2)',
+        background: 'var(--dsw-alias-bg-layer-2)',
+        color: 'var(--dsw-alias-label-primary)',
+        font: 'inherit', textAlign: 'right',
+      },
+      unit: { color: 'var(--dsw-alias-label-tertiary)' },
     }
 
     function ProjectMemoryRow() {
@@ -49,9 +69,9 @@ window.__ModuleLoader__.load({
         () => (form ? form.getSnapshot() : null),
       )
       if (!form || !snapshot) {
-        return el('div', { style: styles.wrap },
-          el('div', { style: styles.title }, '项目记忆'),
-          el('div', { style: styles.hint }, '设置服务未就绪(本插件的 Config 需由宿主 settings 服务投影;未投影时不影响插件其它功能)'))
+        return el('div', { style: css.wrap },
+          el('div', { style: css.title }, '项目记忆'),
+          el('div', { style: css.hint }, '设置服务未就绪(不影响插件其它功能)'))
       }
       const section = (snapshot.value && snapshot.value.disciplineInject) || {}
       const enabled = section.enabled !== false
@@ -74,32 +94,41 @@ window.__ModuleLoader__.load({
         if (safe !== hours) write(['disciplineInject', 'everyHours'], safe)
       }
 
-      return el('div', { style: styles.wrap },
-        el('div', { style: styles.title }, '项目记忆'),
-        el('label', { style: styles.row },
-          el('input', {
-            type: 'checkbox',
-            checked: enabled,
+      return el('div', { style: css.wrap },
+        el('div', { style: css.title }, '项目记忆'),
+        el('div', { style: css.row },
+          el('button', {
+            type: 'button',
+            role: 'switch',
+            'aria-checked': enabled,
+            'aria-label': '项目纪律周期重述',
             disabled: !writable,
-            onChange: (e) => write(['disciplineInject', 'enabled'], e.target.checked),
-          }),
-          '项目纪律周期重述(压缩后必补一次;内容变化立即重述)'),
-        el('label', { style: styles.row },
-          '每',
+            onClick: () => { if (writable) write(['disciplineInject', 'enabled'], !enabled) },
+            style: {
+              ...css.switch,
+              background: enabled ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-border-l2)',
+              cursor: writable ? 'pointer' : 'default',
+              opacity: writable ? 1 : 0.6,
+            },
+          },
+          el('span', { style: { ...css.thumb, left: enabled ? '18px' : '2px' } })),
+          el('span', { style: css.label }, '项目纪律周期重述(压缩后必补一次;内容变化立即重述)')),
+        el('div', { style: css.row },
+          el('span', { style: css.label }, '每'),
           el('input', {
             type: 'number',
             min: 0,
             step: 1,
             value: draft,
             disabled: !writable || !enabled,
-            style: styles.num,
+            style: { ...css.num, opacity: writable && enabled ? 1 : 0.6 },
             onChange: (e) => setDraft(e.target.value),
             onBlur: commitHours,
             onKeyDown: (e) => { if (e.key === 'Enter') commitHours() },
           }),
-          '小时重述一次(0 = 关闭)'),
-        el('div', { style: styles.hint },
-          writable ? '修改会写回当前 profile 配置' : '当前配置不可写(由 profile 覆盖层决定)'))
+          el('span', { style: css.unit }, '小时重述一次(0 = 关闭)')),
+        el('div', { style: css.hint },
+          writable ? '修改立即生效,并写回当前 profile 配置' : '当前配置不可写(由 profile 覆盖层决定)'))
     }
 
     function apply(ctx) {
