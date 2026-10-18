@@ -85,8 +85,34 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
 
   const everyHours = Number.isFinite(config.everyHours) ? config.everyHours : 3
   const everyTurns = Number.isFinite(config.everyTurns) ? config.everyTurns : 0
-  // 两个触发器都关 = 完全静默(压缩补注也不做:那是周期语义的一部分)
-  if (everyHours <= 0 && everyTurns <= 0) return () => {}
+
+  // 运行期读活设置:UI(设置面板)改完立即生效,不必重启。
+  // 命名空间 = profile 条目 id(0.1.7+ 语义);老版 settings 服务没有 describe 时退回纯配置。
+  let liveSettings = null
+  const entryId = (() => {
+    try { return ctx?.fiber?.entry?.options?.id ?? 'behavior-enhancer' } catch { return 'behavior-enhancer' }
+  })()
+  try {
+    ctx.inject?.(['settings'], (sctx) => {
+      liveSettings = sctx?.settings ?? null
+      try {
+        if (liveSettings && typeof liveSettings.configure === 'function' && typeof ctx.effect === 'function') {
+          ctx.effect(() => {
+            const dispose = liveSettings.configure({ auto: false }, ctx.fiber)
+            return () => { try { dispose?.() } catch { /* noop */ } }
+          }, 'dsh-behavior-enhancer: settings presentation')
+        }
+      } catch { /* 老版服务:_auto 不适用,忽略 */ }
+    })
+  } catch { /* inject 不可用:退回纯配置 */ }
+
+  function liveSection() {
+    try {
+      if (!liveSettings || typeof liveSettings.describe !== 'function') return null
+      const hit = liveSettings.describe().find((d) => d && d.ns === entryId)
+      return (hit && hit.value && hit.value.disciplineInject) || null
+    } catch { return null }
+  }
 
   const now = typeof deps.now === 'function' ? deps.now : () => Date.now()
   const stateFile = expandHome(deps.stateFile ?? config.stateFile)
@@ -149,8 +175,14 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
         try { section = extractSection(readFileSync(file, 'utf8'), config.heading) } catch { section = null }
       }
 
-      const hoursDue = everyHours > 0 && now() - state.lastInjectAt >= everyHours * 3600 * 1000
-      const turnsDue = everyTurns > 0 && state.turnsSinceInject >= everyTurns
+      const live = liveSection()
+      const enabledNow = typeof live?.enabled === 'boolean' ? live.enabled : true
+      const hoursNow = Number.isFinite(live?.everyHours) ? live.everyHours : everyHours
+      const turnsNow = Number.isFinite(live?.everyTurns) ? live.everyTurns : everyTurns
+      if (!enabledNow) { persist(); return undefined }
+      if (hoursNow <= 0 && turnsNow <= 0) { persist(); return undefined } // 两个触发器都关 = 完全静默
+      const hoursDue = hoursNow > 0 && now() - state.lastInjectAt >= hoursNow * 3600 * 1000
+      const turnsDue = turnsNow > 0 && state.turnsSinceInject >= turnsNow
       const compactDue = config.compactReinject !== false && state.compactedSinceLastInject
       // 纪律刚写/刚改也立刻重述(否则补完规则要干等一个周期;首次 hash 为空时同样命中)
       const changed = !!section && section.hash !== state.lastDigestHash
@@ -181,7 +213,8 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
         advance()
         return undefined
       }
-      if (config.skipUnchanged !== false && !state.compactedSinceLastInject && section.hash === state.lastDigestHash) {
+      const skipUnchangedNow = typeof live?.skipUnchanged === 'boolean' ? live.skipUnchanged : config.skipUnchanged !== false
+      if (skipUnchangedNow && !state.compactedSinceLastInject && section.hash === state.lastDigestHash) {
         stats?.bump('discipline.skippedUnchanged', 1)
         advance()
         return undefined

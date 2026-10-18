@@ -137,6 +137,11 @@ function resolveSection(section, defaults) {
       if (!(key in defaults)) {
         throw new Error(`dsh-behavior-enhancer config: unknown key "${key}" (allowed: ${Object.keys(defaults).join(', ')})`)
       }
+      // 宿主若用 volatile Config 强转过 config,叶子值会变成 {};把"空对象对非对象默认值"视为未设置
+      if (value && typeof value === 'object' && !Array.isArray(value)
+        && Object.keys(value).length === 0 && defaults[key] !== null && typeof defaults[key] !== 'object') {
+        continue
+      }
       if (NUMERIC_KEYS.has(key)) {
         if (key === 'complexRatio' || key === 'shrinkRatio') assertNumber(key, value, { min: 0, max: 1 })
         else if (key === 'maxBytes' || key === 'maxLineLength') assertNumber(key, value, { min: 1 })

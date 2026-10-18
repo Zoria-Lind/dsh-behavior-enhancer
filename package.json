@@ -18,6 +18,9 @@
   "scripts": {
     "test": "node test/smoke.mjs"
   },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.3"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

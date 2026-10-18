@@ -64,3 +64,5 @@ export function apply(ctx, config = {}) {
 }
 
 export { DEFAULT_CONFIG, resolveConfig }
+// 设置面板的 schema(宿主 settings 服务据此投影表单;导入失败时为 undefined,不影响加载)
+export { Config } from './configSchema.js'

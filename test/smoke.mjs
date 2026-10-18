@@ -98,6 +98,9 @@ console.log('== config ==')
   threw = false
   try { resolveConfig({ projectMemory: { shrinkRatio: 1.5 } }) } catch { threw = true }
   check('projectMemory shrinkRatio 越界报错', threw)
+  // 宿主若用 volatile Config 强转 config,叶子值会变 {};必须视为未设置而不是报错
+  const coerced = resolveConfig({ disciplineInject: { enabled: {}, everyHours: {}, everyTurns: {} } })
+  check('volatile 强转的空对象视为未设置', coerced.disciplineInject.everyHours === 3 && coerced.disciplineInject.enabled === true)
 }
 
 console.log('== npm 打包与 bundle patch 一致性(回归:Issue #2) ==')
@@ -801,6 +804,37 @@ console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
     check('di cleanup 后不再注入', agent.steered.length === 0)
   }
 
+  // 9) 运行期读活设置:面板关掉 → 立即不注入
+  {
+    writeFileSync(agents, md, 'utf8')
+    const ctx0 = makeFakeCtx({
+      settings: { describe: () => [{ ns: 'behavior-enhancer', value: { disciplineInject: { enabled: false } } }] },
+    })
+    const stats = createStats()
+    createDisciplineInjectModule(ctx0, baseCfg, stats,
+      { createUserMessage: fakeCreateUserMessage, now: () => fakeNow, stateFile: join(tmpBase, 's9.json') })
+    const agent = mkAgent()
+    await ctx0.emit('agent/turn-stopping', { agent })
+    check('di 面板关闭后不注入(读活设置)', agent.steered.length === 0 && stats.snapshot().counters['discipline.injected'] === undefined)
+  }
+  // 10) 运行期读活设置:面板改小时数 → 立即按新周期判定
+  {
+    writeFileSync(agents, md, 'utf8')
+    const sf = join(tmpBase, 's10.json')
+    const a = mk(sf)
+    const agent1 = mkAgent()
+    await a.ctx.emit('agent/turn-stopping', { agent: agent1 }) // 先注入一次,把 lastInjectAt 推到"现在"
+    const ctx2 = makeFakeCtx({
+      settings: { describe: () => [{ ns: 'behavior-enhancer', value: { disciplineInject: { enabled: true, everyHours: 0.00001 } } }] },
+    })
+    createDisciplineInjectModule(ctx2, { ...baseCfg, skipUnchanged: false }, createStats(),
+      { createUserMessage: fakeCreateUserMessage, now: () => fakeNow, stateFile: sf })
+    const agent2 = mkAgent()
+    fakeNow += 1000 // 1 秒 ≫ 0.00001 小时(36ms)
+    await ctx2.emit('agent/turn-stopping', { agent: agent2 })
+    check('di 面板改小时数立即生效(读活设置)', agent1.steered.length === 1 && agent2.steered.length === 1)
+  }
+
   rmSync(tmpBase, { recursive: true, force: true })
 }
 
@@ -811,7 +845,12 @@ console.log('== client 入口(P3-a 加载探针) ==')
   await import(new URL('../src/client.js', import.meta.url).href)
   check('client 调用 __ModuleLoader__.load 且 id 正确',
     !!captured && captured.id === '@zoria-lind/dsh-behavior-enhancer')
-  const fakeReact = { createElement: (...args) => ({ type: 'el', args }) }
+  const fakeReact = {
+    createElement: (...args) => ({ type: 'el', args }),
+    useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+    useState: (init) => [init, () => {}],
+    useEffect: (fn) => { fn() },
+  }
   const mod = captured.factory((name) => {
     if (name === 'react') return fakeReact
     throw new Error('unexpected require ' + name)
@@ -819,11 +858,17 @@ console.log('== client 入口(P3-a 加载探针) ==')
   check('client 导出 apply/inject', typeof mod.apply === 'function' && Array.isArray(mod.inject))
   const regs = []
   let slotName = ''
+  const fakeForm = {
+    subscribe: () => () => {},
+    getSnapshot: () => ({ status: 'ready', value: { disciplineInject: { enabled: true, everyHours: 5 } }, writable: true }),
+    mutate: () => Promise.resolve(true),
+  }
   const ctx = {
     slots: {
       inject: (name, cb) => { slotName = name; cb() },
       register: (opts, comp) => { regs.push({ opts, comp }); return () => {} },
     },
+    configForms: { get: () => fakeForm },
   }
   mod.apply(ctx)
   check('client 注册进 settings.general.item 槽',
