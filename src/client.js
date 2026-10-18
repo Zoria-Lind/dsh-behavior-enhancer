@@ -45,7 +45,7 @@ window.__ModuleLoader__.load({
         border: 'none', borderRadius: '10px', cursor: 'pointer', transition: 'background 120ms',
       },
       thumb: {
-        position: 'absolute', top: '2px', width: '16px', height: '16px', borderRadius: '50%',
+        position: 'absolute', top: '2px', width: '16px', height: '16px', borderRadius: '8px',
         background: 'var(--dsw-alias-switch-thumb)', transition: 'left 120ms',
         boxShadow: '0 1px 2px rgba(0,0,0,.18)',
       },
@@ -78,14 +78,17 @@ window.__ModuleLoader__.load({
       const hours = Number.isFinite(section.everyHours) ? section.everyHours : 3
       const writable = snapshot.writable === true
       const [draft, setDraft] = React.useState(hours)
+      const [msg, setMsg] = React.useState('')
       React.useEffect(() => { setDraft(hours) }, [hours])
 
       const write = (path, value) => {
-        if (!form) return
+        if (!form) { setMsg('form 未绑定'); return }
         try {
           const p = form.mutate([{ op: 'set', path, value }])
-          if (p && typeof p.catch === 'function') p.catch(() => {})
-        } catch { /* 写失败保持原值,mirror 会回读 */ }
+          if (p && typeof p.then === 'function') {
+            p.then((ok) => setMsg(ok ? '已保存' : '写入被宿主拒绝'), () => setMsg('写入失败'))
+          } else setMsg('写入已提交')
+        } catch (e) { setMsg('写入异常:' + (e && e.message ? e.message : e)) }
       }
       const commitHours = () => {
         const n = Number(draft)
@@ -111,7 +114,12 @@ window.__ModuleLoader__.load({
               opacity: writable ? 1 : 0.6,
             },
           },
-          el('span', { style: { ...css.thumb, left: enabled ? '18px' : '2px' } })),
+          el('span', { style: {
+            ...css.thumb,
+            left: enabled ? '18px' : '2px',
+            // 开:深色钮(亮轨深钮,与宿主一致);关:switch-thumb(亮色纯白/暗色 neutral-bluish 400)
+            background: enabled ? 'var(--dsw-alias-label-primary-inverted)' : 'var(--dsw-alias-switch-thumb)',
+          } })),
           el('span', { style: css.label }, '项目纪律周期重述(压缩后必补一次;内容变化立即重述)')),
         el('div', { style: css.row },
           el('span', { style: css.label }, '每'),
@@ -128,7 +136,9 @@ window.__ModuleLoader__.load({
           }),
           el('span', { style: css.unit }, '小时重述一次(0 = 关闭)')),
         el('div', { style: css.hint },
-          writable ? '修改立即生效,并写回当前 profile 配置' : '当前配置不可写(由 profile 覆盖层决定)'))
+          'status=' + (snapshot.status || '-') + ' · writable=' + String(writable) +
+          (msg ? ' · ' + msg : '') +
+          (writable ? ' · 修改立即生效' : ' · 当前配置不可写')))
     }
 
     function apply(ctx) {
