@@ -875,9 +875,10 @@ console.log('== client 入口(P3-a 加载探针) ==')
     },
   }
   mod.apply(ctx)
-  check('client 注册进 settings.general.item 槽', regs.length === 1 && regs[0].opts.name === 'settings.general.item')
-  check('client 通过 whileServed 订阅命名空间',
-    Array.isArray(whileServedArgs) && whileServedArgs[0] === 'behavior-enhancer' && !slotName)
+  check('client 注册进 settings.general.item 槽',
+    regs.length === 1 && regs[0].opts.name === 'settings.general.item' && slotName === 'settings.general.item')
+  check('client 调用 whileServed 订阅命名空间(不 gate 挂载)',
+    Array.isArray(whileServedArgs) && whileServedArgs[0] === 'behavior-enhancer')
   check('client 行组件可渲染', typeof regs[0].comp === 'function' && !!regs[0].comp())
   delete globalThis.window
 }

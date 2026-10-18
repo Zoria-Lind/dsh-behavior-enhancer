@@ -115,14 +115,19 @@ window.__ModuleLoader__.load({
         id: ROW_ID,
         order: 700,
       }, ProjectMemoryRow)
-      // 官方页面用法:whileServed 负责订阅命名空间,并把挂载限制在"被服务期间"
+      // 订阅命名空间:whileServed 的回调里不挂载,只用来触发客户端镜像订阅
       try {
         if (ctx.configForms && typeof ctx.configForms.whileServed === 'function') {
-          ctx.configForms.whileServed([ENTRY_ID], register)
-          return
+          ctx.configForms.whileServed([ENTRY_ID], () => () => {})
         }
-      } catch { /* 退回直接注册 */ }
-      ctx.slots.inject('settings.general.item', register)
+      } catch { /* 忽略:订阅失败也要显示行 */ }
+      // 无条件挂载:设置服务没就绪时也显示(带诊断),不能因为未订阅而整行消失
+      try {
+        if (typeof ctx.slots.inject === 'function') ctx.slots.inject('settings.general.item', register)
+        else register()
+      } catch {
+        try { register() } catch { /* noop */ }
+      }
     }
 
     exports.apply = apply
