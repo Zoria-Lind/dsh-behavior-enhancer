@@ -858,6 +858,7 @@ console.log('== client 入口(P3-a 加载探针) ==')
   check('client 导出 apply/inject', typeof mod.apply === 'function' && Array.isArray(mod.inject))
   const regs = []
   let slotName = ''
+  let whileServedArgs = null
   const fakeForm = {
     subscribe: () => () => {},
     getSnapshot: () => ({ status: 'ready', value: { disciplineInject: { enabled: true, everyHours: 5 } }, writable: true }),
@@ -868,11 +869,15 @@ console.log('== client 入口(P3-a 加载探针) ==')
       inject: (name, cb) => { slotName = name; cb() },
       register: (opts, comp) => { regs.push({ opts, comp }); return () => {} },
     },
-    configForms: { get: () => fakeForm },
+    configForms: {
+      get: () => fakeForm,
+      whileServed: (ns, reg) => { whileServedArgs = ns; return reg() },
+    },
   }
   mod.apply(ctx)
-  check('client 注册进 settings.general.item 槽',
-    slotName === 'settings.general.item' && regs.length === 1 && regs[0].opts.name === 'settings.general.item')
+  check('client 注册进 settings.general.item 槽', regs.length === 1 && regs[0].opts.name === 'settings.general.item')
+  check('client 通过 whileServed 订阅命名空间',
+    Array.isArray(whileServedArgs) && whileServedArgs[0] === 'behavior-enhancer' && !slotName)
   check('client 行组件可渲染', typeof regs[0].comp === 'function' && !!regs[0].comp())
   delete globalThis.window
 }
