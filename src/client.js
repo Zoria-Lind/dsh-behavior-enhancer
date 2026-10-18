@@ -22,16 +22,38 @@ window.__ModuleLoader__.load({
 
     const inject = ['slots', 'configForms']
 
-    // profile 里的条目 id(cordis.patch.yml 的 `- id: behavior-enhancer`)
+    // profile 里的条目 id(cordis.patch.yml 的 `- id: behavior-enhancer`);包名作备选命名空间
     const ENTRY_ID = 'behavior-enhancer'
+    const NS_CANDIDATES = [ENTRY_ID, '@zoria-lind/dsh-behavior-enhancer']
     const ROW_ID = 'behavior-enhancer.project-memory'
 
     let clientCtx = null
     let form = null
+    let formKey = ''
 
     function attachForm() {
-      if (form || !clientCtx || !clientCtx.configForms || typeof clientCtx.configForms.get !== 'function') return
-      try { form = clientCtx.configForms.get(ENTRY_ID) } catch { form = null }
+      if (!clientCtx || !clientCtx.configForms || typeof clientCtx.configForms.get !== 'function') return
+      if (form && typeof form.getSnapshot === 'function' && form.getSnapshot()?.status === 'ready') return
+      for (const key of NS_CANDIDATES) {
+        try {
+          const f = clientCtx.configForms.get(key)
+          if (!f) continue
+          const snap = typeof f.getSnapshot === 'function' ? f.getSnapshot() : null
+          if (!form) { form = f; formKey = key }
+          if (snap && snap.status === 'ready') { form = f; formKey = key; return }
+        } catch { /* 试下一个 */ }
+      }
+    }
+
+    // 宿主已服务的命名空间目录(诊断用):configForms.describe()
+    function servedNamespaces() {
+      try {
+        if (!clientCtx || !clientCtx.configForms || typeof clientCtx.configForms.describe !== 'function') return 'no-describe'
+        const d = clientCtx.configForms.describe()
+        const list = Array.isArray(d) ? d : (d && Array.isArray(d.namespaces) ? d.namespaces : d)
+        const text = JSON.stringify(list)
+        return text ? text.slice(0, 240) : 'empty'
+      } catch (e) { return 'describe-error:' + (e && e.message ? e.message : e) }
     }
 
     const css = {
@@ -136,9 +158,9 @@ window.__ModuleLoader__.load({
           }),
           el('span', { style: css.unit }, '小时重述一次(0 = 关闭)')),
         el('div', { style: css.hint },
-          'status=' + (snapshot.status || '-') + ' · writable=' + String(writable) +
-          (msg ? ' · ' + msg : '') +
-          (writable ? ' · 修改立即生效' : ' · 当前配置不可写')))
+          'ns=' + (formKey || '-') + ' · status=' + (snapshot.status || '-') + ' · writable=' + String(writable) +
+          (msg ? ' · ' + msg : '')),
+        el('div', { style: css.hint }, 'served=' + servedNamespaces()))
     }
 
     function apply(ctx) {
