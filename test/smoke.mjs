@@ -14,6 +14,7 @@ import { createFailureGuardModule } from '../src/modules/failureGuard.js'
 import { createPostWriteCheckModule, lightParse } from '../src/modules/postWriteCheck.js'
 import { createProjectMemoryModule, checkMemoryContent, isMemoryFilePath } from '../src/modules/projectMemory.js'
 import { createDisciplineInjectModule, extractSection, findDisciplineFile } from '../src/modules/disciplineInject.js'
+import { createSettingsCommandModule } from '../src/modules/settingsCommand.js'
 import { createWriteDiffVerifyModule, findGitRootsFromCommand } from '../src/modules/writeDiffVerify.js'
 import { createHardGateModule } from '../src/modules/hardGate.js'
 import { createVerifyLoopModule } from '../src/modules/verifyLoop.js'
@@ -836,6 +837,34 @@ console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
   }
 
   rmSync(tmpBase, { recursive: true, force: true })
+}
+
+console.log('== /pm 命令(设置面板不可写时的可靠通道) ==')
+{
+  const calls = []
+  let def = null
+  const ctx = makeFakeCtx({
+    commands: { register: (d) => { def = d; return () => {} } },
+    settings: {
+      describe: () => [{ ns: 'behavior-enhancer', value: { disciplineInject: { everyHours: 3 } } }],
+      mutate: async (ns, ops) => { calls.push({ ns, ops }); return true },
+    },
+  })
+  const stats = createStats()
+  createSettingsCommandModule(ctx, { enabled: true }, stats)
+  check('/pm 已注册', !!def && def.name === 'pm')
+  const run = (raw) => def.handler({ args: raw })
+  const r1 = await run('5')
+  check('/pm 5 → 写 disciplineInject.everyHours=5',
+    calls.length === 1 && calls[0].ops[0].path.join('.') === 'disciplineInject.everyHours'
+    && calls[0].ops[0].value === 5 && /5 小时/.test(r1.text))
+  const r2 = await run('off')
+  check('/pm off → 写入 0', calls[1].ops[0].value === 0 && /已关闭/.test(r2.text))
+  const r3 = await run('status')
+  check('/pm status → 显示当前值', /当前/.test(r3.text))
+  const r4 = await run('abc')
+  check('/pm 非法参数 → 用法提示', r4.kind === 'error' && /用法/.test(r4.text))
+  check('/pm 写入计数', stats.snapshot().counters['discipline.commandSet'] === 2)
 }
 
 console.log('== client 入口(P3-a 加载探针) ==')

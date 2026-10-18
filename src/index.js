@@ -32,6 +32,7 @@ import { createFailureGuardModule } from './modules/failureGuard.js'
 import { createPostWriteCheckModule } from './modules/postWriteCheck.js'
 import { createProjectMemoryModule } from './modules/projectMemory.js'
 import { createDisciplineInjectModule } from './modules/disciplineInject.js'
+import { createSettingsCommandModule } from './modules/settingsCommand.js'
 import { createWriteDiffVerifyModule } from './modules/writeDiffVerify.js'
 import { createHardGateModule } from './modules/hardGate.js'
 import { createVerifyLoopModule } from './modules/verifyLoop.js'
@@ -47,6 +48,8 @@ export function apply(ctx, config = {}) {
   if (resolved.parallelConvergence.enabled) modules.push(createParallelConvergenceModule(ctx, resolved.parallelConvergence, stats))
   if (resolved.failureGuard.enabled) modules.push(createFailureGuardModule(ctx, resolved.failureGuard, stats))
   if (resolved.disciplineInject.enabled) modules.push(createDisciplineInjectModule(ctx, resolved.disciplineInject, stats))
+  // /pm:服务端直写 settings(客户端设置表单的订阅链路在桌面端不可用时的可靠通道)
+  if (resolved.disciplineInject.enabled) modules.push(createSettingsCommandModule(ctx, resolved.disciplineInject, stats))
   // projectMemory 必须先于 postWriteCheck 注册:先注册者更外层,而 postWriteCheck 报错时
   // 会整体替换 decision.content;放外层才能"await next() 后追加",两份报告都不被吞。
   if (resolved.projectMemory.enabled) modules.push(createProjectMemoryModule(ctx, resolved.projectMemory, stats))
