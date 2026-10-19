@@ -63,7 +63,7 @@ export function findDisciplineFile(startDir, candidates = DISCIPLINE_CANDIDATES,
 }
 
 function emptyState() {
-  return { lastInjectAt: 0, turnsSinceInject: 0, lastDigestHash: '', compactedSinceLastInject: false }
+  return { lastInjectAt: 0, turnsSinceInject: 0, lastDigestHash: '', compactedSinceLastInject: false, lastFile: '' }
 }
 
 function loadState(file) {
@@ -74,6 +74,7 @@ function loadState(file) {
       turnsSinceInject: Number.isFinite(data?.turnsSinceInject) ? data.turnsSinceInject : 0,
       lastDigestHash: typeof data?.lastDigestHash === 'string' ? data.lastDigestHash : '',
       compactedSinceLastInject: data?.compactedSinceLastInject === true,
+      lastFile: typeof data?.lastFile === 'string' ? data.lastFile : '',
     }
   } catch {
     return emptyState()
@@ -81,7 +82,9 @@ function loadState(file) {
 }
 
 export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
-  if (!config?.enabled) return () => {}
+  // 不在创建期按 enabled 早退:宿主对 volatile 字段的修改是**原地提交、不重启插件**,
+  // 若关着启动就直接不注册监听器,用户后来打开也永远不会生效(只能重启)。
+  // 启用与否改到每轮判定时读活值。
   if (!ctx || typeof ctx.on !== 'function') return () => {}
 
   const everyHours = Number.isFinite(config.everyHours) ? config.everyHours : 3
@@ -189,23 +192,35 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
     try {
       const agent = payload?.agent
       if (!agent) return undefined
-      state.turnsSinceInject += 1
+      // 子 agent 也会跑 agent loop 并派发本事件:它的 cwd/会话与主对话不同,往里 steer
+      // 既多付一步、主对话又收不到,还会把全局周期计数提前归零 —— 直接跳过。
+      const header = agent?.session?.header
+      if (header?.origin === 'subagent' || header?.parentSession !== undefined) return undefined
 
       const live = liveSection()
+      const enabledNow = typeof live?.enabled === 'boolean' ? live.enabled : config.enabled !== false
+      if (!enabledNow) return undefined
+      state.turnsSinceInject += 1
+
       const headingNow = typeof live?.heading === 'string' && live.heading.trim() ? live.heading : config.heading
       const maxBytesNow = Number.isFinite(live?.maxDigestBytes) ? live.maxDigestBytes : config.maxDigestBytes
 
       const cwd = agent?.session?.header?.cwd
       const file = (typeof cwd === 'string' && cwd) ? findDisciplineFile(cwd, candidates) : null
+      // 状态文件是全局的:换了项目(找到的 AGENTS.md 不同)就把周期计数与内容 hash 归零,
+      // 否则 other 项目的轮次/摘要会串到本项目上(尤其 everyTurns 与 skipUnchanged)。
+      if ((file ?? '') !== state.lastFile) {
+        state.lastFile = file ?? ''
+        state.turnsSinceInject = 1
+        state.lastDigestHash = ''
+      }
       let section = null
       if (file) {
         try { section = extractSection(readFileSync(file, 'utf8'), headingNow) } catch { section = null }
       }
 
-      const enabledNow = typeof live?.enabled === 'boolean' ? live.enabled : true
       const hoursNow = Number.isFinite(live?.everyHours) ? live.everyHours : everyHours
       const turnsNow = Number.isFinite(live?.everyTurns) ? live.everyTurns : everyTurns
-      if (!enabledNow) { persist(); return undefined }
       if (hoursNow <= 0 && turnsNow <= 0) { persist(); return undefined } // 两个触发器都关 = 完全静默
       const hoursDue = hoursNow > 0 && now() - state.lastInjectAt >= hoursNow * 3600 * 1000
       const turnsDue = turnsNow > 0 && state.turnsSinceInject >= turnsNow
@@ -277,23 +292,35 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
     return undefined
   }
 
-  // 压缩后补一次:内核基线是历史消息,压缩会把纪律吃掉
-  const onCompactionEnd = () => {
+  // 压缩后补一次:内核基线是历史消息,压缩会把纪律吃掉。
+  // 注意:压缩**不是 cordis 事件**——内核走 `session.append('compaction/end', …)`,
+  // 由 `session/event` 派发(event.type 才是 'compaction/end')。监 'compaction/end'
+  // 在 0.2.x 上永远不会触发(2026-10-19 复核实证)。旧名字保留一份只为兼容老内核。
+  const markCompacted = () => {
     try {
       if (config.compactReinject === false) return
       state.compactedSinceLastInject = true
       persist()
     } catch { /* noop */ }
   }
+  const onSessionEvent = (session, event) => {
+    if (event?.type !== 'compaction/end') return
+    const header = session?.header
+    if (header?.origin === 'subagent' || header?.parentSession !== undefined) return
+    markCompacted()
+  }
+  const onCompactionEnd = () => markCompacted()
 
   const onFlush = async () => { persist() }
 
   ctx.on('agent/turn-stopping', onTurnStopping)
+  ctx.on?.('session/event', onSessionEvent)
   ctx.on('compaction/end', onCompactionEnd)
   ctx.on('session/flush', onFlush)
 
   return () => {
     try { ctx.off?.('agent/turn-stopping', onTurnStopping) } catch { /* noop */ }
+    try { ctx.off?.('session/event', onSessionEvent) } catch { /* noop */ }
     try { ctx.off?.('compaction/end', onCompactionEnd) } catch { /* noop */ }
     try { ctx.off?.('session/flush', onFlush) } catch { /* noop */ }
     persist()

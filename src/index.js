@@ -74,10 +74,12 @@ export function apply(ctx, config = {}) {
   if (resolved.behaviorPrompt.enabled) modules.push(createBehaviorPromptModule(ctx, resolved.behaviorPrompt, stats))
   if (resolved.parallelConvergence.enabled) modules.push(createParallelConvergenceModule(ctx, resolved.parallelConvergence, stats))
   if (resolved.failureGuard.enabled) modules.push(createFailureGuardModule(ctx, resolved.failureGuard, stats))
+  // disciplineInject / settingsCommand **无条件注册**:宿主对 volatile 字段的修改是原地提交、
+  // 不重启插件;若关着启动就不注册监听器,用户之后打开永远不生效。/pm 也必须常驻,
+  // 否则关掉后没有通道再打开。两者都在每轮判定时读活值。
   // raw:宿主给的原始节(含 volatile 引用)——模块每轮 .get() 取活值,实现"改完立即生效"
-  if (resolved.disciplineInject.enabled) modules.push(createDisciplineInjectModule(ctx, resolved.disciplineInject, stats, { raw: config?.disciplineInject }))
-  // /pm:服务端直写 settings(客户端设置表单的订阅链路在桌面端不可用时的可靠通道)
-  if (resolved.disciplineInject.enabled) modules.push(createSettingsCommandModule(ctx, resolved.disciplineInject, stats))
+  modules.push(createDisciplineInjectModule(ctx, resolved.disciplineInject, stats, { raw: config?.disciplineInject }))
+  modules.push(createSettingsCommandModule(ctx, resolved.disciplineInject, stats))
   // projectMemory 必须先于 postWriteCheck 注册:先注册者更外层,而 postWriteCheck 报错时
   // 会整体替换 decision.content;放外层才能"await next() 后追加",两份报告都不被吞。
   if (resolved.projectMemory.enabled) modules.push(createProjectMemoryModule(ctx, resolved.projectMemory, stats))

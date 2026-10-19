@@ -768,9 +768,38 @@ console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
     const { ctx } = mk(join(tmpBase, 's2.json'))
     const agent = mkAgent()
     await ctx.emit('agent/turn-stopping', { agent })
-    await ctx.emit('compaction/end')
+    // 宿主派发形状:session/event(session, { type: 'compaction/end' })。
+    // 回归:曾经监听 'compaction/end' cordis 事件,在 0.2.x 上永不触发。
+    await ctx.emit('session/event', { header: { id: 's2' } }, { type: 'compaction/end' })
     await ctx.emit('agent/turn-stopping', { agent })
-    check('di 压缩后补注入', agent.steered.length === 2)
+    check('di 压缩后补注入(走 session/event)', agent.steered.length === 2)
+  }
+  // 2b) 子 agent 不参与(它也会派发 turn-stopping,但 cwd/会话不同)
+  {
+    const { ctx, stats } = mk(join(tmpBase, 's2b.json'))
+    const sub = { id: 'sub', session: { header: { cwd: tmpBase, origin: 'subagent' } }, steered: [], steer(m) { this.steered.push(m) } }
+    await ctx.emit('agent/turn-stopping', { agent: sub })
+    check('di 子 agent 不注入且不计数', sub.steered.length === 0
+      && stats.snapshot().counters['discipline.injected'] === undefined)
+    const sub2 = { id: 'sub2', session: { header: { cwd: tmpBase, parentSession: 'main' } }, steered: [], steer(m) { this.steered.push(m) } }
+    await ctx.emit('agent/turn-stopping', { agent: sub2 })
+    check('di parentSession 会话同样跳过', sub2.steered.length === 0)
+  }
+  // 2c) 换项目 → 周期与内容 hash 归零,立即重述新项目的纪律
+  {
+    const projA = join(tmpBase, 'projA')
+    const projB = join(tmpBase, 'projB')
+    mkdirSync(projA, { recursive: true })
+    mkdirSync(projB, { recursive: true })
+    writeFileSync(join(projA, 'AGENTS.md'), '## 项目纪律\n- A 的规矩\n', 'utf8')
+    writeFileSync(join(projB, 'AGENTS.md'), '## 项目纪律\n- B 的规矩\n', 'utf8')
+    const { ctx } = mk(join(tmpBase, 's2c.json'), { everyHours: 0.00001, everyTurns: 0 })
+    const agentA = { id: 'a', session: { header: { cwd: projA } }, steered: [], steer(m) { this.steered.push(m) } }
+    await ctx.emit('agent/turn-stopping', { agent: agentA })
+    check('di 项目 A 首次注入', agentA.steered.length === 1 && /A 的规矩/.test(agentA.steered[0].content[0].text))
+    const agentB = { id: 'b', session: { header: { cwd: projB } }, steered: [], steer(m) { this.steered.push(m) } }
+    await ctx.emit('agent/turn-stopping', { agent: agentB })
+    check('di 换项目立即重述 B(不沿用 A 的 hash/周期)', agentB.steered.length === 1 && /B 的规矩/.test(agentB.steered[0].content[0].text))
   }
   // 3) everyTurns 口径(首轮先建立一次,之后按轮次)
   {
@@ -893,6 +922,9 @@ console.log('== /pm 命令(设置面板不可写时的可靠通道) ==')
   check('/pm status → 显示当前值', /当前/.test(r3.text))
   const r4 = await run('abc')
   check('/pm 非法参数 → 用法提示', r4.kind === 'error' && /用法/.test(r4.text))
+  // 生产调用带的是 rawInput 而不是 args(回归:旧测试只覆盖了 fallback 分支)
+  const r5 = await def.handler({ rawInput: 'status' })
+  check('/pm 接受 rawInput 形状(生产调用)', r5.kind === 'success' && /当前/.test(r5.text))
   check('/pm 写入计数', stats.snapshot().counters['discipline.commandSet'] === 2)
 }
 
@@ -938,6 +970,64 @@ console.log('== client 入口(P3-a 加载探针) ==')
   check('client 调用 whileServed 订阅命名空间(不 gate 挂载)',
     Array.isArray(whileServedArgs) && whileServedArgs[0] === 'behavior-enhancer')
   check('client 行组件可渲染', typeof regs[0].comp === 'function' && !!regs[0].comp())
+  delete globalThis.window
+}
+
+console.log('== client 输入框行为(清空不写 0) ==')
+{
+  // 有状态的假 React:按 hook 调用序保存 state,支持"改草稿 → 重渲染 → 失焦提交"
+  let hookIdx = 0
+  const hookState = []
+  const fakeReact = {
+    createElement: (type, props, ...children) => ({ type, props, children }),
+    useSyncExternalStore: (_sub, get) => get(),
+    useState: (init) => {
+      const slot = hookIdx++
+      if (!(slot in hookState)) hookState[slot] = init
+      return [hookState[slot], (v) => { hookState[slot] = v }]
+    },
+    useEffect: () => {}, // 不跑:否则每次重渲染都会把草稿重置回快照值
+  }
+  let captured = null
+  globalThis.window = { __ModuleLoader__: { load: (spec) => { captured = spec } } }
+  await import(new URL('../src/client.js', import.meta.url).href + '?v=input')
+  const mod = captured.factory((name) => {
+    if (name === 'react') return fakeReact
+    throw new Error('unexpected require ' + name)
+  })
+  const written = []
+  const fakeForm = {
+    subscribe: () => () => {},
+    getSnapshot: () => ({ status: 'ready', value: { disciplineInject: { enabled: true, everyHours: 5 } }, writable: true }),
+    mutate: (ops) => { written.push(ops); return Promise.resolve(true) },
+  }
+  let comp = null
+  const ctx = {
+    slots: { inject: (name, cb) => cb(), register: (opts, c) => { comp = c } },
+    configForms: { get: () => fakeForm, whileServed: (ns, reg) => reg() },
+  }
+  mod.apply(ctx)
+  const render = () => { hookIdx = 0; return comp() }
+  const findInput = (node) => {
+    if (!node || typeof node !== 'object') return null
+    if (node.type === 'input') return node
+    for (const child of node.children ?? []) {
+      const hit = findInput(child)
+      if (hit) return hit
+    }
+    return null
+  }
+  const input1 = findInput(render())
+  check('client 输入框初值为快照值', !!input1 && input1.props.value === 5)
+  input1.props.onChange({ target: { value: '' } })
+  const input2 = findInput(render())
+  input2.props.onBlur()
+  check('client 清空后失焦不写 0(回退当前值)', written.length === 0 && findInput(render()).props.value === 5)
+  const input3 = findInput(render())
+  input3.props.onChange({ target: { value: '9' } })
+  findInput(render()).props.onBlur()
+  check('client 合法输入失焦写入(9)', written.length === 1
+    && written[0][0].path.join('.') === 'disciplineInject.everyHours' && written[0][0].value === 9)
   delete globalThis.window
 }
 

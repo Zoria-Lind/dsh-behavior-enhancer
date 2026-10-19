@@ -10,7 +10,7 @@
 const PATH = ['disciplineInject', 'everyHours']
 
 export function createSettingsCommandModule(ctx, config, stats, deps = {}) {
-  if (!config?.enabled) return () => {}
+  // 常驻注册:即使配置里关着也要能用 `/pm 3h` 把它打开(否则关掉就再无命令行入口)。
   if (!ctx || typeof ctx.inject !== 'function') return () => {}
 
   const entryId = (() => {

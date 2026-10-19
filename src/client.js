@@ -56,17 +56,19 @@ window.__ModuleLoader__.load({
         () => (form ? form.getSnapshot() : null),
         () => (form ? form.getSnapshot() : null),
       )
-      if (!form || !snapshot) {
-        return el('div', { style: css.wrap },
-          el('div', { style: css.title }, '项目记忆'),
-          el('div', { style: css.hint }, '设置服务未就绪(不影响插件其它功能)'))
-      }
-      const section = (snapshot.value && snapshot.value.disciplineInject) || {}
+      // hooks 必须在任何条件 return 之前:form/snapshot 由空变非空时若改变 hooks 数量,
+      // React 会抛 "Rendered more hooks than during the previous render"。
+      const section = (snapshot && snapshot.value && snapshot.value.disciplineInject) || {}
       const hours = Number.isFinite(section.everyHours) ? section.everyHours : 3
-      const writable = snapshot.writable === true
+      const writable = !!snapshot && snapshot.writable === true
       const [draft, setDraft] = React.useState(hours)
       const [msg, setMsg] = React.useState('')
       React.useEffect(() => { setDraft(hours) }, [hours])
+      if (!form || !snapshot) {
+        return el('div', { style: css.wrap },
+          el('div', { style: css.title }, '项目纪律重述'),
+          el('div', { style: css.hint }, '设置服务未就绪(不影响插件其它功能)'))
+      }
 
       const write = (path, value) => {
         if (!form) { setMsg('form 未绑定'); return }
@@ -78,14 +80,17 @@ window.__ModuleLoader__.load({
         } catch (e) { setMsg('写入异常:' + (e && e.message ? e.message : e)) }
       }
       const commit = () => {
-        const n = Number(draft)
-        const safe = Number.isFinite(n) && n >= 0 ? Math.round(n) : 0
+        const raw = String(draft).trim()
+        const n = Number(raw)
+        // 清空或非法输入**不写 0**:那会静默关掉周期重述。回退到当前值。
+        if (raw === '' || !Number.isFinite(n) || n < 0) { setDraft(hours); return }
+        const safe = Math.round(n)
         setDraft(safe)
         if (safe !== hours) write(['disciplineInject', 'everyHours'], safe)
       }
 
       return el('div', { style: css.wrap },
-        el('div', { style: css.title }, '项目记忆'),
+        el('div', { style: css.title }, '项目纪律重述'),
         el('div', { style: css.row },
           el('span', { style: css.label }, '每'),
           el('input', {
@@ -115,10 +120,16 @@ window.__ModuleLoader__.load({
         id: ROW_ID,
         order: 700,
       }, ProjectMemoryRow)
-      // 订阅命名空间:whileServed 的回调里不挂载,只用来触发客户端镜像订阅
+      // 订阅命名空间:whileServed 的回调里不挂载,只用来触发客户端镜像订阅。
+      // 它返回 disposer,按契约由调用方持有 —— 放进 ctx.effect,模块重载时自动解绑。
       try {
         if (ctx.configForms && typeof ctx.configForms.whileServed === 'function') {
-          ctx.configForms.whileServed([ENTRY_ID], () => () => {})
+          const mount = () => {
+            const off = ctx.configForms.whileServed([ENTRY_ID], () => () => {})
+            return () => { try { off?.() } catch { /* noop */ } }
+          }
+          if (typeof ctx.effect === 'function') ctx.effect(mount)
+          else mount()
         }
       } catch { /* 忽略:订阅失败也要显示行 */ }
       // 无条件挂载:设置服务没就绪时也显示(带诊断),不能因为未订阅而整行消失

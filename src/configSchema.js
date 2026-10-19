@@ -27,4 +27,9 @@ function build(S) {
   })
 }
 
-export const Config = Schema ? build(Schema) : undefined
+// build 也要在 try/catch 里:依赖版本/副本不匹配时(如没有 .volatile())构造会抛,
+// 而这里的 re-export 直接挂在插件入口上 —— 抛了就是整个插件加载失败。
+let built = null
+try { built = Schema ? build(Schema) : null } catch { built = null }
+
+export const Config = built ?? undefined
