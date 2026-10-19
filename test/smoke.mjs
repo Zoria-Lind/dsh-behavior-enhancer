@@ -102,6 +102,14 @@ console.log('== config ==')
   // 宿主若用 volatile Config 强转 config,叶子值会变 {};必须视为未设置而不是报错
   const coerced = resolveConfig({ disciplineInject: { enabled: {}, everyHours: {}, everyTurns: {} } })
   check('volatile 强转的空对象视为未设置', coerced.disciplineInject.everyHours === 3 && coerced.disciplineInject.enabled === true)
+  // 回归(2026-10-19 桌面端启动 config-error):宿主的 volatile 字段是引用对象,不是普通值
+  const VOL = Symbol.for('cosmokit.volatile.write')
+  const vol = (v) => { let cur = v; return { get: () => cur, [VOL]: (x) => { cur = x } } }
+  const refCfg = resolveConfig({ disciplineInject: { enabled: vol(true), everyHours: vol(2), everyTurns: vol(5) } })
+  check('volatile 引用解引用:取到活值', refCfg.disciplineInject.enabled === true
+    && refCfg.disciplineInject.everyHours === 2 && refCfg.disciplineInject.everyTurns === 5)
+  const emptyRef = resolveConfig({ disciplineInject: { enabled: vol({}), everyHours: vol({}) } })
+  check('volatile 引用指向空对象时退回默认', emptyRef.disciplineInject.enabled === true && emptyRef.disciplineInject.everyHours === 3)
 }
 
 console.log('== npm 打包与 bundle patch 一致性(回归:Issue #2) ==')
@@ -732,6 +740,27 @@ console.log('== disciplineInject 项目纪律周期重述(v1.3) ==')
     writeFileSync(agents, md.replace('- 流程:Y', '- 流程:W'), 'utf8')
     await ctx.emit('agent/turn-stopping', { agent })
     check('di 内容变化立刻重述(不等周期)', agent.steered.length === 2 && /流程:W/.test(agent.steered[1].content[0].text))
+  }
+  // 1c) 宿主 volatile 引用:{ get(), [Symbol.for('cosmokit.volatile.write')] } —— 改值立即生效
+  // 回归:2026-10-19 桌面端启动即 config-error("enabled" must be boolean),就是因为把引用当成了 {}。
+  {
+    writeFileSync(agents, md, 'utf8')
+    const writeKey = Symbol.for('cosmokit.volatile.write')
+    const ref = (v) => { let cur = v; return { get: () => cur, [writeKey]: (x) => { cur = x } } }
+    const hoursRef = ref(0)
+    const ctx = makeFakeCtx()
+    createDisciplineInjectModule(ctx, { ...baseCfg, everyHours: 0 }, createStats(), {
+      createUserMessage: fakeCreateUserMessage,
+      now: () => fakeNow,
+      stateFile: join(tmpBase, 's1c.json'),
+      raw: { enabled: ref(true), everyHours: hoursRef, everyTurns: ref(0) },
+    })
+    const agent = mkAgent()
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di volatile 引用 everyHours=0 时不注入', agent.steered.length === 0)
+    hoursRef[writeKey](0.00001)
+    await ctx.emit('agent/turn-stopping', { agent })
+    check('di volatile 引用改值后立即生效(免重启)', agent.steered.length === 1)
   }
   // 2) 压缩后补注入(未到点、内容未变)
   {

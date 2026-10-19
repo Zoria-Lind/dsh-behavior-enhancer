@@ -74,7 +74,8 @@ export function apply(ctx, config = {}) {
   if (resolved.behaviorPrompt.enabled) modules.push(createBehaviorPromptModule(ctx, resolved.behaviorPrompt, stats))
   if (resolved.parallelConvergence.enabled) modules.push(createParallelConvergenceModule(ctx, resolved.parallelConvergence, stats))
   if (resolved.failureGuard.enabled) modules.push(createFailureGuardModule(ctx, resolved.failureGuard, stats))
-  if (resolved.disciplineInject.enabled) modules.push(createDisciplineInjectModule(ctx, resolved.disciplineInject, stats))
+  // raw:宿主给的原始节(含 volatile 引用)——模块每轮 .get() 取活值,实现"改完立即生效"
+  if (resolved.disciplineInject.enabled) modules.push(createDisciplineInjectModule(ctx, resolved.disciplineInject, stats, { raw: config?.disciplineInject }))
   // /pm:服务端直写 settings(客户端设置表单的订阅链路在桌面端不可用时的可靠通道)
   if (resolved.disciplineInject.enabled) modules.push(createSettingsCommandModule(ctx, resolved.disciplineInject, stats))
   // projectMemory 必须先于 postWriteCheck 注册:先注册者更外层,而 postWriteCheck 报错时

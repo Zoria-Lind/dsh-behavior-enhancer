@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { resolveKernelModule } from '../kernel.js'
+import { isVolatileRef } from '../config.js'
 
 const DISCIPLINE_CANDIDATES = ['AGENTS.md', 'CLAUDE.md']
 
@@ -125,7 +126,29 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
     })
   } catch { /* inject 不可用:退回纯配置 */ }
 
+  // 宿主给的是 volatile 引用({get(), [cosmokit.volatile.write]}):每次读都是当前值,
+  // 设置面板 / /pm 的写入改的就是它。这是最直接的活值通道,优先于 settings.describe()。
+  const rawSection = deps.raw && typeof deps.raw === 'object' ? deps.raw : null
+  const LIVE_KEYS = ['enabled', 'everyHours', 'everyTurns', 'skipUnchanged', 'heading', 'pointer', 'maxDigestBytes', 'compactReinject']
+
+  function refValue(key) {
+    const v = rawSection ? rawSection[key] : undefined
+    return isVolatileRef(v) ? v.get() : v
+  }
+
   function liveSection() {
+    if (rawSection) {
+      const out = {}
+      let any = false
+      for (const key of LIVE_KEYS) {
+        const v = refValue(key)
+        if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') {
+          out[key] = v
+          any = true
+        }
+      }
+      if (any) return out
+    }
     try {
       if (!liveSettings || typeof liveSettings.describe !== 'function') return null
       const hit = liveSettings.describe().find((d) => d && d.ns === entryId)
@@ -174,9 +197,9 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
     persist()
   }
 
-  function compose(file, body) {
+  function compose(file, body, pointerText) {
     const head = `[项目纪律·重述] 以下是本项目的既定纪律(来自 ${basename(file)};上下文压缩后重述,不必回复):`
-    const pointer = typeof config.pointer === 'string' && config.pointer.trim() ? `\n${config.pointer.trim()}` : ''
+    const pointer = typeof pointerText === 'string' && pointerText.trim() ? `\n${pointerText.trim()}` : ''
     return `${head}\n${body}${pointer}`
   }
 
@@ -187,14 +210,17 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
       if (!agent) return undefined
       state.turnsSinceInject += 1
 
+      const live = liveSection()
+      const headingNow = typeof live?.heading === 'string' && live.heading.trim() ? live.heading : config.heading
+      const maxBytesNow = Number.isFinite(live?.maxDigestBytes) ? live.maxDigestBytes : config.maxDigestBytes
+
       const cwd = agent?.session?.header?.cwd
       const file = (typeof cwd === 'string' && cwd) ? findDisciplineFile(cwd, candidates) : null
       let section = null
       if (file) {
-        try { section = extractSection(readFileSync(file, 'utf8'), config.heading) } catch { section = null }
+        try { section = extractSection(readFileSync(file, 'utf8'), headingNow) } catch { section = null }
       }
 
-      const live = liveSection()
       const enabledNow = typeof live?.enabled === 'boolean' ? live.enabled : true
       const hoursNow = Number.isFinite(live?.everyHours) ? live.everyHours : everyHours
       const turnsNow = Number.isFinite(live?.everyTurns) ? live.everyTurns : everyTurns
@@ -226,9 +252,9 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
         return undefined
       }
       const bytes = Buffer.byteLength(section.text, 'utf8')
-      if (bytes > config.maxDigestBytes) {
+      if (bytes > maxBytesNow) {
         stats?.bump('discipline.oversize', 1)
-        console.warn(`[dsh-behavior-enhancer] ${basename(file)} 的「${config.heading}」节 ${bytes} B 超过 maxDigestBytes(${config.maxDigestBytes}),本轮不重述;请精简该节`)
+        console.warn(`[dsh-behavior-enhancer] ${basename(file)} 的「${headingNow}」节 ${bytes} B 超过 maxDigestBytes(${maxBytesNow}),本轮不重述;请精简该节`)
         advance()
         return undefined
       }
@@ -257,7 +283,7 @@ export function createDisciplineInjectModule(ctx, config, stats, deps = {}) {
       }
 
       agent.steer(createUserMessage({
-        content: [{ type: 'text', text: compose(file, section.text) }],
+        content: [{ type: 'text', text: compose(file, section.text, typeof live?.pointer === 'string' ? live.pointer : config.pointer) }],
         source: { kind: 'plugin:behavior-enhancer', form: 'notice', summary: 'discipline-reinject' },
       }))
       stats?.bump('discipline.injected', 1)

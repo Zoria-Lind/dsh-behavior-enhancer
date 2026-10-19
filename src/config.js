@@ -113,6 +113,21 @@ export const DEFAULT_CONFIG = {
   },
 }
 
+// 宿主把 Config schema 里 `.volatile()` 标记的字段解析成**引用对象**再传给 apply:
+//   Object.freeze({ get: () => current, [Symbol.for('cosmokit.volatile.write')]: (v) => { current = v } })
+// 它不是普通值:JSON.stringify 后只剩 `{}`(get 是函数会被省略),typeof 仍是 'object'。
+// 必须 .get() 取活值;宿主设置面板的写入(settings.mutate / configForms.mutate)更新的
+// 就是同一个引用,所以每轮读取即可看到最新值,不必重启。
+export const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+export function isVolatileRef(value) {
+  return !!value && typeof value === 'object' && VOLATILE_WRITE in value
+}
+
+export function unwrapVolatile(value) {
+  return isVolatileRef(value) ? value.get() : value
+}
+
 const NUMERIC_KEYS = new Set([
   'order', 'recoveryThreshold', 'complexRatio', 'minParallel', 'defaultParallel',
   'contextWindowFallback', 'maxFailures',
@@ -132,12 +147,14 @@ function assertNumber(name, value, { min = 0, max = Infinity } = {}) {
 
 function resolveSection(section, defaults) {
   const out = { ...defaults }
+  section = unwrapVolatile(section)
   if (section && typeof section === 'object') {
-    for (const [key, value] of Object.entries(section)) {
+    for (const [key, rawValue] of Object.entries(section)) {
       if (!(key in defaults)) {
         throw new Error(`dsh-behavior-enhancer config: unknown key "${key}" (allowed: ${Object.keys(defaults).join(', ')})`)
       }
-      // 宿主若用 volatile Config 强转过 config,叶子值会变成 {};把"空对象对非对象默认值"视为未设置
+      // 叶子可能是 volatile 引用(.get() 取活值);取出来仍是空对象时按"未设置"处理
+      const value = unwrapVolatile(rawValue)
       if (value && typeof value === 'object' && !Array.isArray(value)
         && Object.keys(value).length === 0 && defaults[key] !== null && typeof defaults[key] !== 'object') {
         continue
