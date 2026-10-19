@@ -122,7 +122,7 @@ dsh plugin --profile web add ./dsh-behavior-enhancer
       post_write_check: true
 ```
 
-### 怎么改「每 N 小时」（v1.3.2）
+### 怎么改「每 N 小时」（v1.3.0）
 
 两条通道，都不必重启：
 
