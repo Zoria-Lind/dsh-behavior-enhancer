@@ -122,30 +122,28 @@ dsh plugin --profile web add ./dsh-behavior-enhancer
       post_write_check: true
 ```
 
-## 开发
+### 怎么改「每 N 小时」（v1.3.2）
 
-```bash
-node test/smoke.mjs          # 单进程全量自检（无需 API），npm test 同
-```
+两条通道，都不必重启：
 
-## 路线图
+- **通用设置**：设置 → 通用 →「项目记忆」一行，改数字后失焦即生效，并落盘到 profile 的 `cordis.patch.yml`。
+- **会话命令**：`/pm status`（查看当前值）· `/pm 3h`（设为 3 小时）· `/pm off`（关闭）。
 
-- 实验分支：给 grep/glob 补 `isConcurrencySafe`（需 agent 作用域 shadow 包装器，复杂度高，主线不依赖）
-- dsh-memory-bridge 联动（配置节已占位；`~/.dsh-memory/files/` 文件快照已就绪，等 bridge 服务上线后支持"从快照找回文件正确版本"）
+原理：`disciplineInject` 在 `Config` schema 里声明为 volatile 字段，宿主会把它们解析成引用对象（`{ get(), [Symbol.for('cosmokit.volatile.write')] }`）交给插件；本插件**每轮判定时 `.get()` 取活值**，所以设置面板与命令的修改立即生效。schema 导入失败时 `Config` 为 `undefined`，只是一行 UI 不出现，其余功能照常。
 
 ## 权限与边界（上架声明）
 
 | 类别 | 实际行为 | 边界 |
 | :--- | :--- | :--- |
-| 文件 files | 读写 `~/.dsh/behavior-enhancer/state.json`（parallelConvergence 串行状态）；postWriteCheck 在 write/edit 执行前把目标文件快照到 `~/.dsh-memory/files/`（`.bak-<时间戳>`，每文件留 5 份），写后检查失败时把快照回滚写回目标文件 | 不写 Profile 配置、不改 DSH 核心/官方包；用户工作区的读写**仅限模型主动调用的 write/edit 目标文件**，快照目录固定为 `~/.dsh-memory/files/` |
+| 文件 files | 在 `~/.dsh/behavior-enhancer/` 下维护 `state.json`（并行收敛状态）、`discipline-state.json`（重述周期与内容 hash）、`stats.json`（遵守度计数）、`boot.json`（每次启动写一条加载记录）；postWriteCheck 在 write/edit 执行前把目标文件快照到 `~/.dsh-memory/files/`（`.bak-<时间戳>`，每文件留 5 份），写后检查失败时把快照回滚写回目标文件 | 不写 Profile 配置、不改 DSH 核心/官方包；用户工作区的读写**仅限模型主动调用的 write/edit 目标文件**，快照目录固定为 `~/.dsh-memory/files/` |
 | 网络 network | 无 | 不发起任何网络请求 |
 | 命令 commands | 无 | 不执行任何子进程 |
 | 凭据 credentials | 无 | 不读取任何环境变量或凭据 |
 
-- **运行时依赖**：零 npm 依赖，无外部服务。
+- **运行时依赖**：核心路径零依赖、无外部服务；`@deepseek-ai/schemastery` 只用于设置面板的 `Config` 声明（导入失败即视为无 schema，仅少一行 UI，其余功能照常）。
 - **失败边界**：所有模块 fail-open——状态文件损坏即丢弃重来；约束段是**软约束**（行为提示），强制收敛由并行池与 followup 两条独立路径保证，任何一条失效不影响 DSH 核心流程。
 - **已知风险**：`failureGuard` 通过 `agent.followup()` 注入提示，模型是否服从取决于模型本身；`behaviorPrompt.text` 若被改成动态内容会破坏 DeepSeek 前缀缓存（默认静态）。`postWriteCheck` 的轻量解析是启发式（非编译器），回滚恢复的是整个文件的写入前版本（文件写入前已存在的问题会一并带回）；检查范围仅 write/edit 工具，经 pwsh/bash 等命令写入的文件不检查。**不要把 `md` 加进 `postWriteCheck.checkExtensions`**——括号配对会在含 JSON/代码片段的记忆文件上误判，进而**回滚整个记忆文件**；记忆文件交给 `projectMemory`（只提示、永不回滚）。
-- **兼容范围**：支持基线 DSH `0.1.5-rc.x`（Node ≥ 18）：`0.1.5-rc.1` 已按核心源码静态核验全部依赖 API、`0.1.5-rc.2` 经真实环境运行验证（Issue #2 报告），`0.2.0-rc.2`（官方桌面端内核）已在实际运行中验证并在 `package.json` 的 `dsh.compatibility.dshReleases` 中标为 `compatible`；`≤0.1.4` 旧版不再跟踪支持。
+- **兼容范围**：支持基线 DSH `0.1.5-rc.x`（Node ≥ 18）：`0.1.5-rc.1` 已按核心源码静态核验全部依赖 API、`0.1.5-rc.2` 经真实环境运行验证（Issue #2 报告），`0.2.0-rc.2` 与 `0.2.1-rc.2`（官方桌面端内核）已在实际运行中验证（含纪律重述注入、设置面板写入、`/pm` 命令），并在 `package.json` 的 `dsh.compatibility.dshReleases` 中标为 `compatible`；`≤0.1.4` 旧版不再跟踪支持。
 
 ### 项目记忆边界
 
