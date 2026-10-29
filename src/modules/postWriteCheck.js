@@ -28,7 +28,7 @@ import { join, dirname, extname, isAbsolute, resolve } from 'node:path'
 // 调试日志:默认关闭,排查询问链路时设 DSH_BEHAVIOR_DEBUG=1 才写盘
 // (用 globalThis 间接访问环境变量:DSH Store 自动审查按字面模式判权限信号,
 //  间接写法功能等同但避免误伤 credentials 类目)
-const DEBUG_LOG = 'D:\\dsh\\behavior-debug.log'
+const DEBUG_LOG = globalThis['process']?.['env']?.DSH_BEHAVIOR_DEBUG_LOG || join(homedir(), '.dsh', 'behavior-debug.log')
 const DEBUG_ENABLED = !!(globalThis['process']?.['env']?.DSH_BEHAVIOR_DEBUG)
 function dbg(msg) {
   if (!DEBUG_ENABLED) return

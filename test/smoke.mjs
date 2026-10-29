@@ -1209,33 +1209,108 @@ console.log('== verifyLoop(B4) ==')
 
 console.log('== compliance(B5) ==')
 {
-  const stateFile = join(tmpdir(), 'beh-stats-' + Math.random().toString(36).slice(2) + '.json')
-  const registered = []
-  const ctx = makeFakeCtx({ commands: { register: (def) => { registered.push(def); return () => { const i = registered.indexOf(def); if (i >= 0) registered.splice(i, 1) } } } })
-  const stats = createStats()
-  stats.bump('hardGate.denied', 2)
-  stats.bump('verifyLoop.nudged', 1)
-  createComplianceModule(ctx, { ...resolveConfig({}).compliance, statsPath: stateFile }, stats)
-  check('B5:/behavior-status 已注册', registered.length === 1 && registered[0].name === 'behavior-status')
+  const tmpBase = mkdtempSync(join(tmpdir(), 'beh-stats-'))
+  const stateFile = join(tmpBase, 'stats.json')
+  const disposers = []
+  const attach = (file, stats) => {
+    const commands = []
+    const ctx = makeFakeCtx({ commands: { register: (def) => { commands.push(def); return () => {} } } })
+    disposers.push(createComplianceModule(ctx, { ...resolveConfig({}).compliance, statsPath: file }, stats))
+    return { ctx, commands }
+  }
+  const readState = () => JSON.parse(readFileSync(stateFile, 'utf8'))
+  try {
+    const stats = createStats()
+    stats.bump('hardGate.denied', 2)
+    stats.bump('verifyLoop.nudged', 1)
+    const { ctx, commands } = attach(stateFile, stats)
+    check('B5:/behavior-status 已注册', commands.length === 1 && commands[0].name === 'behavior-status')
 
-  // session/flush → 落盘(totals = 累计);命令输出含两列数字
-  await ctx.emit('session/flush', { session: {} })
-  check('B5:flush 后 stats.json 落盘', existsSync(stateFile))
-  const persisted = JSON.parse(readFileSync(stateFile, 'utf8'))
-  check('B5:落盘内容含 totals', persisted?.totals?.['hardGate.denied'] === 2 && persisted?.totals?.['verifyLoop.nudged'] === 1)
+    const beforeFlush = await commands[0].handler({})
+    check('B5:命令区分本次运行与已保存的历史累计', beforeFlush.kind === 'success'
+      && /指标 \| 本次运行 \| 历史累计/.test(beforeFlush.text)
+      && /hardGate\.denied \| 2 \| 0/.test(beforeFlush.text)
+      && commands[0].description.includes('本次运行'))
 
-  const out = await registered[0].handler({})
-  check('B5:命令返回 success 且含两列数字(本会话/累计)', out.kind === 'success' && /hardGate\.denied \| 2 \| 2/.test(out.text))
+    await ctx.emit('session/flush', { session: {} })
+    check('B5:flush 后 stats.json 落盘', existsSync(stateFile))
+    check('B5:保留 version 1 格式与首次计数', readState().version === 1
+      && readState().totals['hardGate.denied'] === 2 && readState().totals['verifyLoop.nudged'] === 1)
+    const out = await commands[0].handler({})
+    check('B5:命令返回 success 且含两列数字(本次运行/历史累计)', out.kind === 'success' && /hardGate\.denied \| 2 \| 2/.test(out.text))
 
-  // 第二个实例(模拟重启):从文件载入 totals,新会话计数并入
-  const stats2 = createStats()
-  stats2.bump('hardGate.denied', 1)
-  const ctx2 = makeFakeCtx({ commands: { register: (def) => { registered.push(def); return () => {} } } })
-  createComplianceModule(ctx2, { ...resolveConfig({}).compliance, statsPath: stateFile }, stats2)
-  await ctx2.emit('session/flush', { session: {} })
-  const persisted2 = JSON.parse(readFileSync(stateFile, 'utf8'))
-  check('B5:跨会话累计(2+1=3)', persisted2?.totals?.['hardGate.denied'] === 3)
-  rmSync(stateFile, { recursive: true, force: true })
+    await ctx.emit('session/flush', { session: {} })
+    check('B5:无新增事件重复 flush 不重复累计', readState().totals['hardGate.denied'] === 2
+      && readState().totals['verifyLoop.nudged'] === 1)
+
+    stats.bump('hardGate.denied', 1)
+    stats.bump('new.metric', 2)
+    // 同一运行内两个会话同时触发持久化，也只能保存一份新增计数。
+    await Promise.all([ctx.emit('session/flush', { session: { id: 'a' } }), ctx.emit('session/flush', { session: { id: 'b' } })])
+    check('B5:新增事件、未变指标及新指标各自准确累计', readState().totals['hardGate.denied'] === 3
+      && readState().totals['verifyLoop.nudged'] === 1 && readState().totals['new.metric'] === 2)
+
+    // 用目录占住目标文件，使临时文件写入成功、原子替换失败。
+    const lastSaved = readFileSync(stateFile, 'utf8')
+    rmSync(stateFile)
+    mkdirSync(stateFile)
+    stats.bump('hardGate.denied', 2)
+    let failedFlushRejected = false
+    try { await ctx.emit('session/flush', { session: {} }) } catch { failedFlushRejected = true }
+    check('B5:原子替换失败不阻断会话 flush', !failedFlushRejected)
+    const failedStatus = await commands[0].handler({})
+    check('B5:写盘失败不提前更新历史累计', failedStatus.kind === 'success'
+      && /hardGate\.denied \| 5 \| 3/.test(failedStatus.text))
+    check('B5:写盘失败清理临时统计文件', !readdirSync(tmpBase).some((name) => name.startsWith('stats.json.tmp-')))
+
+    rmSync(stateFile, { recursive: true })
+    writeFileSync(stateFile, lastSaved, 'utf8')
+    stats.bump('hardGate.denied', 1) // 失败后又有新事件，重试应一并保存。
+    await ctx.emit('session/flush', { session: {} })
+    check('B5:失败后新增事件并重试不丢不重', readState().totals['hardGate.denied'] === 6
+      && readState().totals['verifyLoop.nudged'] === 1 && readState().totals['new.metric'] === 2)
+    await ctx.emit('session/flush', { session: {} })
+    check('B5:重试成功后再次 flush 不重复累计', readState().totals['hardGate.denied'] === 6)
+
+    disposers.pop()()
+    const stats2 = createStats()
+    stats2.bump('hardGate.denied', 1)
+    const restarted = attach(stateFile, stats2)
+    await restarted.ctx.emit('session/flush', { session: {} })
+    await restarted.ctx.emit('session/flush', { session: {} })
+    check('B5:重启续算且重复保存不重复累计(6+1=7)', readState().totals['hardGate.denied'] === 7
+      && readState().totals['verifyLoop.nudged'] === 1 && readState().totals['new.metric'] === 2)
+
+    // 原有 version 1 文件直接续算，未再产生事件的历史指标也必须保留。
+    const legacyFile = join(tmpBase, 'legacy.json')
+    writeFileSync(legacyFile, JSON.stringify({ version: 1, updatedAt: '2026-01-01T00:00:00.000Z', totals: { 'hardGate.denied': 10, 'legacy.metric': 7 } }))
+    const legacyStats = createStats()
+    legacyStats.bump('hardGate.denied', 2)
+    const legacy = attach(legacyFile, legacyStats)
+    await legacy.ctx.emit('session/flush', { session: {} })
+    await legacy.ctx.emit('session/flush', { session: {} })
+    const legacySaved = JSON.parse(readFileSync(legacyFile, 'utf8'))
+    check('B5:旧文件兼容且保留历史指标', legacySaved.version === 1
+      && legacySaved.totals['hardGate.denied'] === 12 && legacySaved.totals['legacy.metric'] === 7)
+
+    // 首次保存时连目录都无法创建，恢复后仍应保存全部未确认计数。
+    const blockedParent = join(tmpBase, 'blocked-parent')
+    writeFileSync(blockedParent, 'fixture: parent is a file', 'utf8')
+    const firstFile = join(blockedParent, 'stats.json')
+    const firstStats = createStats()
+    firstStats.bump('hardGate.denied', 4)
+    const first = attach(firstFile, firstStats)
+    await first.ctx.emit('session/flush', { session: {} })
+    const firstStatus = await first.commands[0].handler({})
+    check('B5:首次建目录失败不提前累计', /hardGate\.denied \| 4 \| 0/.test(firstStatus.text))
+    rmSync(blockedParent)
+    await first.ctx.emit('session/flush', { session: {} })
+    await first.ctx.emit('session/flush', { session: {} })
+    check('B5:首次保存失败恢复后只累计一次', JSON.parse(readFileSync(firstFile, 'utf8')).totals['hardGate.denied'] === 4)
+  } finally {
+    for (const dispose of disposers) dispose()
+    rmSync(tmpBase, { recursive: true, force: true })
+  }
 }
 
 console.log('')

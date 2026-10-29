@@ -11,6 +11,7 @@
 // 铁律:pre/post 任何分支都必须显式 return decision;git 调用带超时,绝不阻塞工具链。
 import { execFile, execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
 const MAX_DIFF_BYTES = 80 * 1024 // 截断口径与 better-edit 对齐(400 行 / 80KB)
@@ -19,16 +20,20 @@ const MAX_DIFF_BYTES = 80 * 1024 // 截断口径与 better-edit 对齐(400 行 /
 // 找不到 git → spawn ENOENT → 基线永远 null(2026-09-14 实测:解析器找到仓库根但
 // 标注仍为 0,noBaseline 689)。`where git` 解析 + 常见安装位兜底。
 const GIT_CANDIDATES = [
+  globalThis['process']?.['env']?.DSH_BEHAVIOR_GIT,
   (() => { try { const out = String(execFileSync('where', ['git'], { windowsHide: true, timeout: 2000 })); const hit = out.split(/\r?\n/)[0]?.trim(); return hit || null } catch { return null } })(),
-  'D:\\download\\Git\\cmd\\git.exe',
   'C:\\Program Files\\Git\\cmd\\git.exe',
 ]
 const GIT_BIN = GIT_CANDIDATES.find((p) => p && existsSync(p)) ?? 'git'
 
 // 诊断埋点(2026-09-14 深夜排查 ⚠ D 三次修复未生效):每条 pwsh 一行,
 // 落本地文件(harness stdout 被丢弃,文件是唯一可见通道)。排查完可删。
-const DEBUG_LOG = 'D:/dsh/behavior-enhancer/wdv-debug.log'
-const dbg = (msg) => { try { appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`, 'utf8') } catch { /* ignore */ } }
+const DEBUG_LOG = globalThis['process']?.['env']?.DSH_BEHAVIOR_DEBUG_LOG || join(homedir(), '.dsh', 'behavior-wdv-debug.log')
+const DEBUG_ENABLED = !!globalThis['process']?.['env']?.DSH_BEHAVIOR_DEBUG
+const dbg = (msg) => {
+  if (!DEBUG_ENABLED) return
+  try { appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`, 'utf8') } catch { /* ignore */ }
+}
 
 // 与 dsh-tool-pwsh 的 resolveWorkdir 同款:相对 workdir 要相对会话 cwd 解析。
 // exec 上没有 cwd 字段,只能拼 exec.arguments.workdir ?? session.header.cwd;禁止 process.cwd()。

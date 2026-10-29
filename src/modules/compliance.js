@@ -6,8 +6,8 @@
 // 不要放 session/event(post-commit、非持久屏障)、更不要放 tools/result(emit-only,
 // 失败被吞)。Session 实例上没有 flush()——落盘唯一入口是 ctx.sessions.flush(session)。
 //
-// 统计口径:会话内实时计数来自 stats(内存);跨会话累计 totals 在本模块内维护
-// (boot 时从文件读入,session/flush 时并入并写回)。
+// 统计口径:本次插件运行的实时计数来自 stats(内存);历史累计 totals 只反映已落盘数据。
+// 启动时读取历史,session/flush 只保存上次成功落盘之后的新增计数。
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -37,47 +37,54 @@ export function createComplianceModule(ctx, config, stats, deps = {}) {
   }
 
   let totals = loadTotals()
+  let persistedCounters = {}
 
-  function persistTotals() {
-    mkdirSync(dirname(file), { recursive: true })
-    const payload = { version: 1, updatedAt: new Date().toISOString(), totals }
+  function persistTotals(nextTotals) {
+    const payload = { version: 1, updatedAt: new Date().toISOString(), totals: nextTotals }
     const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
     try {
+      mkdirSync(dirname(file), { recursive: true })
       writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8')
       renameSync(tmp, file)
+      return true
     } catch (err) {
       try { unlinkSync(tmp) } catch { /* 忽略 */ }
       console.warn(`[dsh-behavior-enhancer] 统计落盘失败(${err?.message ?? err})`) // 只 log:不能拖垮会话持久化
+      return false
     }
   }
 
-  // session/flush(并行持久性屏障):把本会话计数并入 totals 并写回
+  // 同步保存增量;只有原子替换成功才推进总量与检查点,失败可安全重试。
   const onFlush = async () => {
     try {
       const { counters } = stats.snapshot()
+      const nextTotals = { ...totals }
       for (const [k, v] of Object.entries(counters)) {
-        totals[k] = (totals[k] ?? 0) + v
+        nextTotals[k] = (totals[k] ?? 0) + v - (persistedCounters[k] ?? 0)
       }
-      persistTotals()
+      if (persistTotals(nextTotals)) {
+        totals = nextTotals
+        persistedCounters = { ...counters }
+      }
     } catch (err) {
       console.warn(`[dsh-behavior-enhancer] session/flush 统计处理失败(${err?.message ?? err})`)
     }
   }
   ctx.on?.('session/flush', onFlush)
 
-  // /behavior-status(P6 姿势):输出会话内实时计数 + 跨会话累计
+  // /behavior-status(P6 姿势):输出本次插件运行计数 + 已落盘的历史累计
   const disposers = []
   ctx.inject?.(['commands'], (cmdCtx) => {
     try {
       disposers.push(cmdCtx.commands.register({
         name: 'behavior-status',
-        description: '查看 dsh-behavior-enhancer 行为遵守度统计(本会话 / 累计)',
+        description: '查看 dsh-behavior-enhancer 行为遵守度统计(本次运行 / 历史累计)',
         handler: () => {
           try {
             const { counters } = stats.snapshot()
             const keys = new Set([...Object.keys(counters), ...Object.keys(totals)])
-            if (keys.size === 0) return { kind: 'success', text: '[behavior-enhancer] 暂无统计记录(本会话还没有工具调用/拦截/提醒事件)。' }
-            const lines = ['[behavior-enhancer] 遵守度统计', '指标 | 本会话 | 累计']
+            if (keys.size === 0) return { kind: 'success', text: '[behavior-enhancer] 暂无统计记录(本次运行还没有工具调用/拦截/提醒事件)。' }
+            const lines = ['[behavior-enhancer] 遵守度统计', '指标 | 本次运行 | 历史累计']
             for (const k of [...keys].sort()) {
               lines.push(`${k} | ${counters[k] ?? 0} | ${totals[k] ?? 0}`)
             }

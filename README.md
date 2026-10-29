@@ -131,6 +131,14 @@ dsh plugin --profile web add ./dsh-behavior-enhancer
 
 原理：`disciplineInject` 在 `Config` schema 里声明为 volatile 字段，宿主会把它们解析成引用对象（`{ get(), [Symbol.for('cosmokit.volatile.write')] }`）交给插件；本插件**每轮判定时 `.get()` 取活值**，所以设置面板与命令的修改立即生效。schema 导入失败时 `Config` 为 `undefined`，只是一行 UI 不出现，其余功能照常。
 
+## 遵守度统计
+
+`/behavior-status` 显示两列：**本次运行**是当前插件实例启动以来的实时计数（同一实例内多个会话共用），**历史累计**是最近成功写入 `stats.json` 的总量。未触发 `session/flush` 的新增事件只出现在本次运行列。
+
+每次 `session/flush` 只保存上次成功落盘后的增量；无新增事件时重复保存不会重复累计。创建目录、写临时文件或替换目标文件失败时只记录警告，不阻断会话持久化，也不推进总量和检查点；后续 flush 会重试尚未保存的增量。
+
+保持原有 `version: 1` 文件格式，重启后从旧文件续算。旧版本已经重复累计的历史数字无法从现有总量还原，本修复保留原值，不自动清零或重写历史。
+
 ## 权限与边界（上架声明）
 
 | 类别 | 实际行为 | 边界 |
